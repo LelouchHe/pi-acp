@@ -56,6 +56,7 @@ test('PiAcpAgent: loadSession replays toolResult as tool_call + tool_call_update
     assert.ok(toolCallUpdate)
     assert.equal(toolCallUpdate.toolCallId, 'call_1')
     assert.equal(toolCallUpdate.status, 'completed')
+    assert.deepEqual(toolCallUpdate.content, [{ type: 'content', content: { type: 'text', text: 'hello from bash' } }])
     assert.deepEqual(toolCallUpdate._meta, {
       terminal_output: { terminal_id: 'call_1', data: 'hello from bash' },
       terminal_exit: { terminal_id: 'call_1', exit_code: 0, signal: null }

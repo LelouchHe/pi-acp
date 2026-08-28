@@ -1023,6 +1023,14 @@ export class PiAcpAgent implements ACPAgent {
               sessionUpdate: 'tool_call_update',
               toolCallId,
               status: isError ? 'failed' : 'completed',
+              content: text
+                ? [
+                    {
+                      type: 'content',
+                      content: { type: 'text', text }
+                    }
+                  ]
+                : undefined,
               _meta: {
                 ...(text ? bashTerminalOutputMeta(toolCallId, text) : {}),
                 ...bashTerminalExitMeta(toolCallId, bashExitCode(m, isError))

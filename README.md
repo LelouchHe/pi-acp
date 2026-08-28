@@ -5,6 +5,7 @@ This fork adds behavior needed by multi-session ACP clients such as WebAgent:
 - Keeps multiple ACP sessions live in the same connection instead of closing the previous pi subprocess when another session is created or loaded.
 - Publishes Pi's current context-window usage and cumulative cost through the standard ACP `usage_update` session update after session creation/loading, settled turns, compaction, and model changes.
 - Includes current context usage in the built-in `/session` output when Pi reports it.
+- Emits Bash output as standard textual ACP tool content while retaining the existing terminal metadata for clients that support it.
 
 ---
 

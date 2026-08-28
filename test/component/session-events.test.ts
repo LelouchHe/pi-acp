@@ -137,7 +137,7 @@ test('PiAcpSession: emits tool_call + tool_call_update + completes', async () =>
     type: 'tool_execution_end',
     toolCallId: 't1',
     isError: false,
-    result: { content: [{ type: 'text', text: 'done' }] }
+    result: { content: [{ type: 'text', text: 'runningdone' }] }
   })
 
   await new Promise(r => setTimeout(r, 0))
@@ -159,7 +159,9 @@ test('PiAcpSession: emits tool_call + tool_call_update + completes', async () =>
   assert.equal(conn.updates[1]!.update.sessionUpdate, 'tool_call_update')
   assert.equal((conn.updates[1]!.update as any).toolCallId, 't1')
   assert.equal((conn.updates[1]!.update as any).status, 'in_progress')
-  assert.equal((conn.updates[1]!.update as any).content, undefined)
+  assert.deepEqual((conn.updates[1]!.update as any).content, [
+    { type: 'content', content: { type: 'text', text: 'running' } }
+  ])
   assert.deepEqual((conn.updates[1]!.update as any)._meta, {
     terminal_output: { terminal_id: 't1', data: 'running' }
   })
@@ -168,7 +170,9 @@ test('PiAcpSession: emits tool_call + tool_call_update + completes', async () =>
   assert.equal(conn.updates[2]!.update.sessionUpdate, 'tool_call_update')
   assert.equal((conn.updates[2]!.update as any).toolCallId, 't1')
   assert.equal((conn.updates[2]!.update as any).status, 'completed')
-  assert.equal((conn.updates[2]!.update as any).content, undefined)
+  assert.deepEqual((conn.updates[2]!.update as any).content, [
+    { type: 'content', content: { type: 'text', text: 'runningdone' } }
+  ])
   assert.deepEqual((conn.updates[2]!.update as any)._meta, {
     terminal_output: { terminal_id: 't1', data: 'done' },
     terminal_exit: { terminal_id: 't1', exit_code: 0, signal: null }

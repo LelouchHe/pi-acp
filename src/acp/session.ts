@@ -478,6 +478,14 @@ export class PiAcpSession {
       sessionUpdate: 'tool_call_update',
       toolCallId: params.toolCallId,
       status: params.status,
+      content: text
+        ? ([
+            {
+              type: 'content',
+              content: { type: 'text', text }
+            }
+          ] satisfies ToolCallContent[])
+        : undefined,
       _meta: {
         ...(delta ? bashTerminalOutputMeta(params.toolCallId, delta) : {}),
         ...(params.status === 'completed' || params.status === 'failed'
