@@ -366,15 +366,7 @@ export class PiAcpAgent implements ACPAgent {
           updateNotice
         })
 
-    if (preludeText)
-      session.setStartupInfo(preludeText)
-
-      // Policy: within a single ACP connection (one client window), keep only one live pi subprocess.
-      // This avoids leaking subprocesses when clients start new sessions but don't explicitly close old ones.
-      // It does NOT affect other client windows because they run in separate agent processes.
-      //
-      // (Tests sometimes stub out `this.sessions`, so guard the call.)
-    ;(this.sessions as any).closeAllExcept?.(session.sessionId)
+    if (preludeText) session.setStartupInfo(preludeText)
 
     const response = {
       sessionId: session.sessionId,
@@ -392,10 +384,11 @@ export class PiAcpAgent implements ACPAgent {
     // it will still be emitted as the first chunk of the first prompt.
     if (preludeText) setTimeout(() => session.sendStartupInfoIfPending(), 0)
 
-    // Advertise slash commands (ACP: available_commands_update)
+    // Advertise usage and slash commands (ACP: available_commands_update)
     // Important: some clients (e.g. Zed) will ignore notifications for an unknown sessionId.
     // So we must send this *after* the session/new response has been delivered.
     setTimeout(() => {
+      void session.sendUsageUpdate()
       void (async () => {
         try {
           const pi = (await session.proc.getCommands()) as any
@@ -471,6 +464,7 @@ export class PiAcpAgent implements ACPAgent {
             content: { type: 'text', text }
           }
         })
+        await session.sendUsageUpdate()
 
         return { stopReason: 'end_turn' }
       }
@@ -496,6 +490,15 @@ export class PiAcpAgent implements ACPAgent {
           if (parts.length) lines.push(`Tokens: ${parts.join(', ')}`)
         }
 
+        const context = stats?.contextUsage
+        if (
+          typeof context?.tokens === 'number' &&
+          typeof context?.contextWindow === 'number' &&
+          context.contextWindow > 0
+        ) {
+          lines.push(`Context: ${context.tokens} / ${context.contextWindow}`)
+        }
+
         // Fallback if stats shape changes.
         const text = lines.length ? lines.join('\n') : `Session stats:\n${JSON.stringify(stats, null, 2)}`
 
@@ -506,6 +509,7 @@ export class PiAcpAgent implements ACPAgent {
             content: { type: 'text', text }
           }
         })
+        await session.sendUsageUpdate(stats)
 
         return { stopReason: 'end_turn' }
       }
@@ -952,10 +956,6 @@ export class PiAcpAgent implements ACPAgent {
     const proc = session.proc
     const fileCommands = loadSlashCommands(params.cwd)
 
-    // Policy: within a single ACP connection (one Zed window), keep only one live pi subprocess.
-    // (Tests sometimes stub out `this.sessions`, so guard the call.)
-    ;(this.sessions as any).closeAllExcept?.(session.sessionId)
-
     // (Optional) ensure mapping stays fresh.
     this.store.upsert({
       sessionId: params.sessionId,
@@ -1073,8 +1073,9 @@ export class PiAcpAgent implements ACPAgent {
       }
     }
 
-    // Advertise slash commands after the response so the client knows the session exists.
+    // Advertise usage and slash commands after the response so the client knows the session exists.
     setTimeout(() => {
+      void session.sendUsageUpdate()
       void (async () => {
         try {
           const pi = (await proc.getCommands()) as any
@@ -1138,6 +1139,7 @@ export class PiAcpAgent implements ACPAgent {
     const session = await this.restoreSession(params.sessionId)
     await setSessionModel(session.proc, params.modelId)
     await emitConfigOptionsUpdate(this.conn, session.sessionId, session.proc)
+    await session.sendUsageUpdate()
   }
 
   async setSessionMode(params: SetSessionModeRequest): Promise<SetSessionModeResponse> {
@@ -1193,6 +1195,7 @@ export class PiAcpAgent implements ACPAgent {
     }
 
     const configOptions = await emitConfigOptionsUpdate(this.conn, session.sessionId, session.proc)
+    if (configId === MODEL_CONFIG_ID) await session.sendUsageUpdate()
     return { configOptions }
   }
 }

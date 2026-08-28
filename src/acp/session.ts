@@ -59,6 +59,27 @@ const CONFIRM_PERMISSION_OPTIONS: PermissionOption[] = [
 const EXTENSION_UI_RAW_INPUT_KEYS = ['title', 'message', 'options', 'placeholder', 'prefill'] as const
 const CHOICE_OPTION_PREFIX = 'choice-'
 
+export function toAcpUsageUpdate(stats: unknown): SessionUpdate | null {
+  const value = stats as {
+    contextUsage?: { tokens?: unknown; contextWindow?: unknown } | null
+    cost?: unknown
+  } | null
+  const used = value?.contextUsage?.tokens
+  const size = value?.contextUsage?.contextWindow
+
+  if (!Number.isSafeInteger(used) || (used as number) < 0 || !Number.isSafeInteger(size) || (size as number) <= 0) {
+    return null
+  }
+
+  const cost = value?.cost
+  return {
+    sessionUpdate: 'usage_update',
+    used: used as number,
+    size: size as number,
+    ...(typeof cost === 'number' && Number.isFinite(cost) ? { cost: { amount: cost, currency: 'USD' } } : {})
+  }
+}
+
 function findUniqueLineNumber(text: string, needle: string): number | undefined {
   if (!needle) return undefined
 
@@ -174,14 +195,6 @@ export class SessionManager {
       // ignore
     }
     this.sessions.delete(sessionId)
-  }
-
-  /** Close all sessions except the one with `keepSessionId`. */
-  closeAllExcept(keepSessionId: string): void {
-    for (const [id] of this.sessions) {
-      if (id === keepSessionId) continue
-      this.close(id)
-    }
   }
 
   async create(params: SessionCreateParams): Promise<PiAcpSession> {
@@ -415,6 +428,17 @@ export class PiAcpSession {
 
   private async flushEmits(): Promise<void> {
     await this.lastEmit
+  }
+
+  async sendUsageUpdate(stats?: unknown): Promise<void> {
+    try {
+      const update = toAcpUsageUpdate(stats ?? (await this.proc.getSessionStats()))
+      if (!update) return
+      this.emit(update)
+      await this.flushEmits()
+    } catch {
+      // Usage reporting is optional; never fail a session when pi cannot provide it.
+    }
   }
 
   private emitBashToolCall(params: {
@@ -837,9 +861,9 @@ export class PiAcpSession {
       }
 
       case 'agent_settled': {
-        // Ensure all updates derived from pi events are delivered before we resolve
-        // the ACP `session/prompt` request.
-        void this.flushEmits().finally(() => {
+        // Refresh usage after retries, compaction, and queued continuations settle,
+        // then deliver every update before resolving the ACP prompt request.
+        void this.sendUsageUpdate().finally(() => {
           const reason: StopReason = this.cancelRequested ? 'cancelled' : 'end_turn'
           this.pendingTurn?.resolve(reason)
           this.pendingTurn = null

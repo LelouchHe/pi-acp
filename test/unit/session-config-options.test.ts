@@ -49,7 +49,8 @@ test('PiAcpAgent: newSession returns configOptions for model and thinking select
         }
       },
       setStartupInfo() {},
-      sendStartupInfoIfPending() {}
+      sendStartupInfoIfPending() {},
+      async sendUsageUpdate() {}
     }
 
     const agent = new PiAcpAgent(asAgentConn(conn), {} as any)
@@ -121,7 +122,8 @@ test('PiAcpAgent: setSessionConfigOption maps model changes to pi and emits conf
         setModelCalls.push({ provider, modelId })
         state.model = { provider, id: modelId }
       }
-    }
+    },
+    async sendUsageUpdate() {}
   }
 
   const agent = new PiAcpAgent(asAgentConn(conn), {} as any)
@@ -170,7 +172,8 @@ test('PiAcpAgent: setSessionConfigOption maps thought level changes to pi and em
         thinkingLevels.push(level)
         state.thinkingLevel = level
       }
-    }
+    },
+    async sendUsageUpdate() {}
   }
 
   const agent = new PiAcpAgent(asAgentConn(conn), {} as any)

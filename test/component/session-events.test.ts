@@ -3,8 +3,60 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { PiAcpSession } from '../../src/acp/session.js'
+import { PiAcpSession, toAcpUsageUpdate } from '../../src/acp/session.js'
 import { FakeAgentSideConnection, FakePiRpcProcess, asAgentConn } from '../helpers/fakes.js'
+
+test('toAcpUsageUpdate maps pi context stats to ACP usage_update', () => {
+  assert.deepEqual(
+    toAcpUsageUpdate({
+      contextUsage: { tokens: 61_234, contextWindow: 272_000, percent: 22.5 },
+      cost: 0.45
+    }),
+    {
+      sessionUpdate: 'usage_update',
+      used: 61_234,
+      size: 272_000,
+      cost: { amount: 0.45, currency: 'USD' }
+    }
+  )
+})
+
+test('toAcpUsageUpdate omits unavailable post-compaction usage', () => {
+  assert.equal(toAcpUsageUpdate({ contextUsage: { tokens: null, contextWindow: 272_000 } }), null)
+})
+
+test('PiAcpSession: emits usage_update before an agent turn settles', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+  proc.sessionStats = {
+    contextUsage: { tokens: 61_234, contextWindow: 272_000, percent: 22.5 },
+    cost: 0.45
+  }
+
+  const session = new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  const prompt = session.prompt('hello')
+  proc.emit({ type: 'agent_settled' })
+  assert.equal(await prompt, 'end_turn')
+
+  const usage = conn.updates.find(msg => msg.update.sessionUpdate === 'usage_update')
+  assert.deepEqual(usage, {
+    sessionId: 's1',
+    update: {
+      sessionUpdate: 'usage_update',
+      used: 61_234,
+      size: 272_000,
+      cost: { amount: 0.45, currency: 'USD' }
+    }
+  })
+})
 
 test('PiAcpSession: emits agent_message_chunk for text_delta', async () => {
   const conn = new FakeAgentSideConnection()

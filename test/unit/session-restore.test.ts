@@ -24,6 +24,130 @@ class FakeSessions {
   }
 }
 
+class MultiSessionFakeSessions {
+  readonly sessions = new Map<string, any>()
+  readonly closed: string[] = []
+
+  constructor(private readonly createdSession: any) {
+    this.sessions.set('existing-session', { sessionId: 'existing-session' })
+  }
+
+  async create() {
+    this.sessions.set(this.createdSession.sessionId, this.createdSession)
+    return this.createdSession
+  }
+
+  maybeGet(sessionId: string) {
+    return this.sessions.get(sessionId)
+  }
+
+  close(sessionId: string) {
+    this.closed.push(sessionId)
+    this.sessions.delete(sessionId)
+  }
+
+  getOrCreate(sessionId: string, params: any) {
+    const existing = this.sessions.get(sessionId)
+    if (existing) return existing
+    const session = {
+      sessionId,
+      cwd: params.cwd,
+      proc: params.proc,
+      async sendUsageUpdate() {}
+    }
+    this.sessions.set(sessionId, session)
+    return session
+  }
+}
+
+test('PiAcpAgent: newSession keeps existing sessions live', async () => {
+  const realSetTimeout = globalThis.setTimeout
+  ;(globalThis as any).setTimeout = () => 0 as any
+
+  const session = {
+    sessionId: 'new-session',
+    cwd: process.cwd(),
+    proc: {
+      async getAvailableModels() {
+        return { models: [{ provider: 'test', id: 'model', name: 'Model' }] }
+      },
+      async getState() {
+        return {
+          sessionId: 'new-session',
+          thinkingLevel: 'medium',
+          model: { provider: 'test', id: 'model' }
+        }
+      }
+    },
+    setStartupInfo() {},
+    sendStartupInfoIfPending() {},
+    async sendUsageUpdate() {}
+  }
+  const sessions = new MultiSessionFakeSessions(session)
+
+  try {
+    const agent = new PiAcpAgent(asAgentConn(new FakeAgentSideConnection()), {} as any)
+    ;(agent as any).sessions = sessions as any
+
+    await agent.newSession({ cwd: process.cwd(), mcpServers: [] } as any)
+
+    assert.equal(sessions.sessions.has('existing-session'), true)
+    assert.equal(sessions.sessions.has('new-session'), true)
+    assert.deepEqual(sessions.closed, [])
+  } finally {
+    ;(globalThis as any).setTimeout = realSetTimeout
+  }
+})
+
+test('PiAcpAgent: loadSession only replaces the requested live session', async () => {
+  const conn = new FakeAgentSideConnection()
+  const sessions = new MultiSessionFakeSessions(null)
+  sessions.sessions.set('loaded-session', { sessionId: 'loaded-session' })
+  const originalSpawn = PiRpcProcess.spawn
+
+  ;(PiRpcProcess as any).spawn = async () =>
+    ({
+      onEvent: () => () => {},
+      getMessages: async () => ({ messages: [] }),
+      getState: async () => ({
+        thinkingLevel: 'medium',
+        model: { provider: 'test', id: 'model' }
+      }),
+      getAvailableModels: async () => ({
+        models: [{ provider: 'test', id: 'model', name: 'Model' }]
+      }),
+      getCommands: async () => ({ commands: [] })
+    }) as any
+
+  try {
+    const agent = new PiAcpAgent(asAgentConn(conn), {} as any)
+    ;(agent as any).sessions = sessions as any
+    ;(agent as any).store = {
+      get(sessionId: string) {
+        if (sessionId !== 'loaded-session') return null
+        return {
+          sessionId,
+          cwd: process.cwd(),
+          sessionFile: '/tmp/loaded-session.jsonl'
+        }
+      },
+      upsert() {}
+    }
+
+    await agent.loadSession({
+      sessionId: 'loaded-session',
+      cwd: process.cwd(),
+      mcpServers: []
+    } as any)
+
+    assert.deepEqual(sessions.closed, ['loaded-session'])
+    assert.equal(sessions.sessions.has('existing-session'), true)
+    assert.equal(sessions.sessions.has('loaded-session'), true)
+  } finally {
+    PiRpcProcess.spawn = originalSpawn
+  }
+})
+
 test('PiAcpAgent: prompt auto-restores a missing session from SessionStore', async () => {
   const conn = new FakeAgentSideConnection()
   const promptCalls: Array<{ message: string; images: unknown[] }> = []
@@ -129,7 +253,8 @@ test('PiAcpAgent: setSessionConfigOption auto-restores via pi session discovery 
   const sessions = new FakeSessions((sessionId, params) => ({
     sessionId,
     cwd: params.cwd,
-    proc: params.proc
+    proc: params.proc,
+    async sendUsageUpdate() {}
   }))
 
   const originalSpawn = PiRpcProcess.spawn
