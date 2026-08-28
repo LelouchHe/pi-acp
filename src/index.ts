@@ -48,8 +48,9 @@ const output = new ReadableStream<Uint8Array>({
 })
 
 const stream = ndJsonStream(input, output)
+const approveProject = process.argv.includes('--approve')
 
-const agent = new AgentSideConnection(conn => new PiAcpAgent(conn), stream)
+const agent = new AgentSideConnection(conn => new PiAcpAgent(conn, { approveProject }), stream)
 
 function shutdown() {
   try {

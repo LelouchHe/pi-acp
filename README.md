@@ -7,6 +7,7 @@ This fork adds behavior needed by multi-session ACP clients such as WebAgent:
 - Includes current context usage in the built-in `/session` output when Pi reports it.
 - Emits Bash output as standard textual ACP tool content while retaining the existing terminal metadata for clients that support it.
 - Uses Pi's Bash tool name as the ACP title and exposes the full command through `rawInput.command`, allowing clients to render it as collapsible detail instead of an oversized title.
+- Supports `pi-acp --approve` to pass Pi's per-process `--approve` project-trust override into every RPC session.
 
 ---
 
@@ -120,6 +121,16 @@ Point your ACP client to the built `dist/index.js`:
     }
   }
 ```
+
+### Project trust
+
+Pass `--approve` to trust project-local Pi settings and resources for every RPC subprocess started by this adapter invocation:
+
+```bash
+pi-acp --approve
+```
+
+This maps to Pi's per-process `--approve` flag; it does not write a persistent trust decision. Only enable it for projects whose `.pi` resources, skills, packages, and extensions you trust.
 
 ### Environment variables
 
