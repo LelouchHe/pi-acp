@@ -6,6 +6,7 @@ This fork adds behavior needed by multi-session ACP clients such as WebAgent:
 - Publishes Pi's current context-window usage and cumulative cost through the standard ACP `usage_update` session update after session creation/loading, settled turns, compaction, and model changes.
 - Includes current context usage in the built-in `/session` output when Pi reports it.
 - Emits Bash output as standard textual ACP tool content while retaining the existing terminal metadata for clients that support it.
+- Uses Pi's Bash tool name as the ACP title and exposes the full command through `rawInput.command`, allowing clients to render it as collapsible detail instead of an oversized title.
 
 ---
 

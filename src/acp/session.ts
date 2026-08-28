@@ -16,7 +16,6 @@ import { maybeAuthRequiredError } from './auth-required.js'
 import { SessionStore } from './session-store.js'
 import { expandSlashCommand, type FileSlashCommand } from './slash-commands.js'
 import {
-  bashCommand,
   bashExitCode,
   bashOutputDelta,
   bashResultText,
@@ -454,10 +453,11 @@ export class PiAcpSession {
     this.emit({
       sessionUpdate: params.sessionUpdate,
       toolCallId: params.toolCallId,
-      title: bashCommand(params.args) ?? params.toolName,
+      title: params.toolName,
       kind: 'execute',
       status: params.status,
       locations: params.locations,
+      rawInput: params.args,
       ...(params.includeTerminal ? { content: bashTerminalContent(params.toolCallId) } : {}),
       ...(params.includeTerminal ? { _meta: bashTerminalInfoMeta(params.toolCallId, this.cwd) } : {})
     })
