@@ -1,16 +1,18 @@
-# pi-acp
-
-ACP ([Agent Client Protocol](https://agentclientprotocol.com/overview/introduction)) adapter for [`pi`](https://github.com/earendil-works/pi) coding agent (fka shitty coding agent).
-
-`pi-acp` communicates **ACP JSON-RPC 2.0 over stdio** to an ACP client (e.g. Zed editor) and spawns `pi --mode rpc`, bridging requests/events between the two.
-
-## Changes in this fork
+# Changes in this fork
 
 This fork adds behavior needed by multi-session ACP clients such as WebAgent:
 
 - Keeps multiple ACP sessions live in the same connection instead of closing the previous pi subprocess when another session is created or loaded.
 - Publishes Pi's current context-window usage and cumulative cost through the standard ACP `usage_update` session update after session creation/loading, settled turns, compaction, and model changes.
 - Includes current context usage in the built-in `/session` output when Pi reports it.
+
+---
+
+# pi-acp
+
+ACP ([Agent Client Protocol](https://agentclientprotocol.com/overview/introduction)) adapter for [`pi`](https://github.com/earendil-works/pi) coding agent (fka shitty coding agent).
+
+`pi-acp` communicates **ACP JSON-RPC 2.0 over stdio** to an ACP client (e.g. Zed editor) and spawns `pi --mode rpc`, bridging requests/events between the two.
 
 ## Status
 
@@ -21,7 +23,6 @@ Expect some minor breaking changes.
 ## Features
 
 - Streams assistant output as ACP `agent_message_chunk`
-- Reports current context-window usage and cumulative cost through ACP `usage_update`
 - Maps pi tool execution to ACP `tool_call` / `tool_call_update`
   - Tool call locations are surfaced when available for ACP clients that support opening the referenced file/context
   - Relative file paths from pi are resolved against the session cwd before being emitted as ACP tool locations, which enables follow-along features in clients like Zed
@@ -155,7 +156,7 @@ Loaded from:
 - `/compact [instructions...]` – run pi compaction (optionally with custom instructions)
 - `/autocompact on|off|toggle` – toggle automatic compaction
 - `/export` – export the current session to HTML in the session `cwd`
-- `/session` – show session stats (tokens/context/messages/cost/session file)
+- `/session` – show session stats (tokens/messages/cost/session file)
 - `/name <name>` – set session display name
 - `/queue all|one-at-a-time` – set pi queue mode (unstable feature)
 - `/changelog` – print the installed pi changelog (best-effort)
