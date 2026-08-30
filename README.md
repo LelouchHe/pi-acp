@@ -8,6 +8,7 @@ This fork adds behavior needed by multi-session ACP clients such as WebAgent:
 - Emits Bash output as standard textual ACP tool content while retaining the existing terminal metadata for clients that support it.
 - Uses Pi's Bash tool name as the ACP title and exposes the full command through `rawInput.command`, allowing clients to render it as collapsible detail instead of an oversized title.
 - Supports `pi-acp --approve` to pass Pi's per-process `--approve` project-trust override into every RPC session.
+- Supports opt-in forwarding of Pi extension slash commands with `pi-acp --extension-commands`.
 
 ---
 
@@ -132,6 +133,16 @@ pi-acp --approve
 
 This maps to Pi's per-process `--approve` flag; it does not write a persistent trust decision. Only enable it for projects whose `.pi` resources, skills, packages, and extensions you trust.
 
+### Extension slash commands
+
+Extension-provided slash commands are hidden by default because some depend on Pi's interactive TUI. Enable advertising and invocation for commands that support headless/RPC execution with:
+
+```bash
+pi-acp --extension-commands
+```
+
+Unsupported extension UI methods may still be cancelled by the adapter. This option does not make TUI-only dashboards render in ACP clients.
+
 ### Environment variables
 
 - `PI_ACP_ENABLE_EMBEDDED_CONTEXT=true` advertises ACP `promptCapabilities.embeddedContext` support to the client.
@@ -186,7 +197,7 @@ Other built-in commands:
 
 - Skill commands can be enabled in pi settings and will appear in the slash command list in ACP client as `/skill:skill-name`.
 
-**Note**: Slash commands provided by pi extensions are not currently supported.
+**Note**: Slash commands provided by Pi extensions are disabled by default. Start `pi-acp` with `--extension-commands` to expose commands that support headless/RPC execution; TUI-only command interfaces remain unsupported.
 
 ## Authentication (ACP Registry support)
 

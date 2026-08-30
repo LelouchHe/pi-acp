@@ -122,6 +122,7 @@ const pkg = readNearestPackageJson(import.meta.url)
 
 export interface PiAcpAgentConfig {
   approveProject?: boolean
+  includeExtensionCommands?: boolean
 }
 
 export class PiAcpAgent implements ACPAgent {
@@ -130,6 +131,7 @@ export class PiAcpAgent implements ACPAgent {
   private readonly store = new SessionStore()
   private readonly restoringSessions = new Map<string, Promise<PiAcpSession>>()
   private readonly approveProject: boolean
+  private readonly includeExtensionCommands: boolean
 
   dispose(): void {
     this.sessions.disposeAll()
@@ -141,6 +143,7 @@ export class PiAcpAgent implements ACPAgent {
   constructor(conn: AgentSideConnection, config: PiAcpAgentConfig = {}) {
     this.conn = conn
     this.approveProject = config.approveProject === true
+    this.includeExtensionCommands = config.includeExtensionCommands === true
   }
 
   private cleanupFailedNewSession(sessionId: string, state?: any | null): void {
@@ -401,7 +404,7 @@ export class PiAcpAgent implements ACPAgent {
           const pi = (await session.proc.getCommands()) as any
           const { commands } = toAvailableCommandsFromPiGetCommands(pi, {
             enableSkillCommands,
-            includeExtensionCommands: false
+            includeExtensionCommands: this.includeExtensionCommands
           })
 
           await this.conn.sessionUpdate({
@@ -1099,7 +1102,7 @@ export class PiAcpAgent implements ACPAgent {
           const pi = (await proc.getCommands()) as any
           const { commands } = toAvailableCommandsFromPiGetCommands(pi, {
             enableSkillCommands,
-            includeExtensionCommands: false
+            includeExtensionCommands: this.includeExtensionCommands
           })
 
           await this.conn.sessionUpdate({

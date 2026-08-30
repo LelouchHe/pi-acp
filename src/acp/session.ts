@@ -349,7 +349,8 @@ export class PiAcpSession {
   }
 
   async prompt(message: string, images: unknown[] = []): Promise<StopReason> {
-    // pi RPC mode disables slash command expansion, so we do it here.
+    // Pi RPC executes registered extension commands, but file-based prompt templates
+    // are expanded by the interactive client, so the adapter expands those here.
     const expandedMessage = expandSlashCommand(message, this.fileCommands)
 
     const turnPromise = new Promise<StopReason>((resolve, reject) => {
