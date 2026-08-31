@@ -794,6 +794,53 @@ test('PiAcpSession: cancel flips stopReason to cancelled', async () => {
   assert.equal(reason, 'cancelled')
 })
 
+test('PiAcpSession: extension command completes on RPC response without agent_settled', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+
+  const session = new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  await session.runExtensionCommand('/analytics')
+
+  assert.equal(proc.prompts.length, 1)
+  assert.equal(proc.prompts[0]!.message, '/analytics')
+  assert.equal((session as any).pendingTurn, null)
+})
+
+test('PiAcpSession: queues extension command behind an active agent prompt', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+
+  const session = new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  const agentPrompt = session.prompt('one')
+  const extensionCommand = session.runExtensionCommand('/analytics')
+
+  assert.equal(proc.prompts.length, 1)
+  assert.equal(proc.prompts[0]!.message, 'one')
+
+  proc.emit({ type: 'agent_settled' })
+  assert.equal(await agentPrompt, 'end_turn')
+  await extensionCommand
+
+  assert.equal(proc.prompts.length, 2)
+  assert.equal(proc.prompts[1]!.message, '/analytics')
+})
+
 test('PiAcpSession: queues concurrent prompt and starts it after agent_settled', async () => {
   const conn = new FakeAgentSideConnection()
   const proc = new FakePiRpcProcess()

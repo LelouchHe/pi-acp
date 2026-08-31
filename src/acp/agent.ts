@@ -43,7 +43,7 @@ import {
 import { promptToPiMessage } from './translate/prompt.js'
 import { loadSlashCommands, parseCommandArgs, toAvailableCommands } from './slash-commands.js'
 import { getAgentDir, getEnableSkillCommands, getQuietStartup } from './pi-settings.js'
-import { toAvailableCommandsFromPiGetCommands } from './pi-commands.js'
+import { hasExtensionCommand, toAvailableCommandsFromPiGetCommands } from './pi-commands.js'
 import { maybeAuthRequiredError } from './auth-required.js'
 import { isAbsolute } from 'node:path'
 import { existsSync, readFileSync, realpathSync, readdirSync, statSync, unlinkSync } from 'node:fs'
@@ -442,6 +442,7 @@ export class PiAcpAgent implements ACPAgent {
     const session = await this.restoreSession(params.sessionId)
 
     const { message, images } = promptToPiMessage(params.prompt)
+    let slashCommand: string | null = null
 
     // Built-in ACP slash command handling (headless-friendly subset).
     // Note: file-based slash commands are expanded inside session.prompt().
@@ -449,6 +450,7 @@ export class PiAcpAgent implements ACPAgent {
       const trimmed = message.trim()
       const space = trimmed.indexOf(' ')
       const cmd = space === -1 ? trimmed.slice(1) : trimmed.slice(1, space)
+      slashCommand = cmd
       const argsString = space === -1 ? '' : trimmed.slice(space + 1)
       const args = parseCommandArgs(argsString)
 
@@ -892,6 +894,19 @@ export class PiAcpAgent implements ACPAgent {
           }
         })
 
+        return { stopReason: 'end_turn' }
+      }
+    }
+
+    if (slashCommand && this.includeExtensionCommands) {
+      let commands: unknown
+      try {
+        commands = await session.proc.getCommands()
+      } catch {
+        // Fall through to the normal prompt path if command discovery fails.
+      }
+      if (!session.hasFileCommand(message) && hasExtensionCommand(commands, slashCommand)) {
+        await session.runExtensionCommand(message, images)
         return { stopReason: 'end_turn' }
       }
     }

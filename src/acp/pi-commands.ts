@@ -8,6 +8,18 @@ export type PiRpcCommandInfo = {
   path?: unknown
 }
 
+function commandList(data: unknown): PiRpcCommandInfo[] {
+  const root: any = data
+  return Array.isArray(root?.commands) ? root.commands : Array.isArray(root?.data?.commands) ? root.data.commands : []
+}
+
+export function hasExtensionCommand(data: unknown, commandName: string): boolean {
+  return commandList(data).some(
+    command =>
+      command?.source === 'extension' && typeof command.name === 'string' && command.name.trim() === commandName
+  )
+}
+
 function describeFallback(c: PiRpcCommandInfo): string {
   const source = typeof c.source === 'string' ? c.source : ''
   const location = typeof c.location === 'string' ? c.location : ''
@@ -29,12 +41,7 @@ export function toAvailableCommandsFromPiGetCommands(
   const enableSkillCommands = opts?.enableSkillCommands ?? true
   const includeExtensionCommands = opts?.includeExtensionCommands ?? false
 
-  const root: any = data
-  const commandsRaw: PiRpcCommandInfo[] = Array.isArray(root?.commands)
-    ? root.commands
-    : Array.isArray(root?.data?.commands)
-      ? root.data.commands
-      : []
+  const commandsRaw = commandList(data)
 
   const out: AvailableCommand[] = []
 

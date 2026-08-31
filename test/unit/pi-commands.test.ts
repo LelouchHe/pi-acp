@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { toAvailableCommandsFromPiGetCommands } from '../../src/acp/pi-commands.js'
+import { hasExtensionCommand, toAvailableCommandsFromPiGetCommands } from '../../src/acp/pi-commands.js'
 
 test('toAvailableCommandsFromPiGetCommands: hides extension commands by default and filters skill commands', () => {
   const data = {
@@ -29,4 +29,8 @@ test('toAvailableCommandsFromPiGetCommands: hides extension commands by default 
 
   const noSkills = toAvailableCommandsFromPiGetCommands(data, { enableSkillCommands: false }).commands
   assert.deepEqual(noSkills, [{ name: 'y', description: '(prompt:project)' }])
+
+  assert.equal(hasExtensionCommand(data, 'x'), true)
+  assert.equal(hasExtensionCommand(data, 'y'), false)
+  assert.equal(hasExtensionCommand(data, 'missing'), false)
 })

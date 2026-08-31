@@ -32,6 +32,41 @@ test('PiAcpAgent: /steering is handled adapter-side', async () => {
   assert.match((last as any).update.content.text, /Steering mode: one-at-a-time/)
 })
 
+test('PiAcpAgent: enabled extension command completes through the synchronous command path', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess() as any
+  proc.getCommands = async () => ({
+    commands: [{ name: 'analytics', source: 'extension' }]
+  })
+
+  const commands: string[] = []
+  const session = {
+    sessionId: 's1',
+    proc,
+    fileCommands: [],
+    hasFileCommand() {
+      return false
+    },
+    async runExtensionCommand(message: string) {
+      commands.push(message)
+    },
+    async prompt() {
+      throw new Error('extension command entered the agent prompt path')
+    }
+  }
+
+  const agent = new PiAcpAgent(asAgentConn(conn), { includeExtensionCommands: true })
+  ;(agent as any).sessions = new FakeSessions(session) as any
+
+  const res = await agent.prompt({
+    sessionId: 's1',
+    prompt: [{ type: 'text', text: '/analytics' }]
+  } as any)
+
+  assert.equal(res.stopReason, 'end_turn')
+  assert.deepEqual(commands, ['/analytics'])
+})
+
 test('PiAcpAgent: /name sets session display name adapter-side', async () => {
   const conn = new FakeAgentSideConnection()
   const proc = new FakePiRpcProcess() as any
