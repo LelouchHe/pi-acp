@@ -9,6 +9,7 @@ This fork adds behavior needed by multi-session ACP clients such as WebAgent:
 - Uses Pi's Bash tool name as the ACP title and exposes the full command through `rawInput.command`, allowing clients to render it as collapsible detail instead of an oversized title.
 - Supports `pi-acp --approve` to pass Pi's per-process `--approve` project-trust override into every RPC session.
 - Supports opt-in forwarding of Pi extension slash commands with `pi-acp --extension-commands`.
+- Orders the advertised model list by Pi's `enabledModels` (the `/scoped-models` selection): models configured there move to the front in that order, unmatched models keep their original order. Unconfigured, the list stays unchanged. Configure via `~/.pi/agent/settings.json`, e.g. `"enabledModels": ["opencode-go/deepseek-v4-flash", "opencode-go/glm-5.3-flash"]` (entries support `*` globs and `:thinking` suffixes).
 
 ---
 

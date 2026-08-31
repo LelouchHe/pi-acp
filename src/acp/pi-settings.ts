@@ -58,6 +58,20 @@ export function getEnableSkillCommands(cwd: string): boolean {
 }
 
 /**
+ * pi's `/scoped-models` selection: `enabledModels` ("provider/model" id list),
+ * persisted to global settings by pi and overridable per project.
+ * Returns `undefined` when absent or malformed so callers can fall back to
+ * the full model list unchanged.
+ */
+export function getEnabledModels(cwd: string): string[] | undefined {
+  const merged = getMergedSettings(cwd)
+  const value = merged.enabledModels
+  if (!Array.isArray(value)) return undefined
+  const models = value.filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+  return models.length > 0 ? models : undefined
+}
+
+/**
  * Mirror pi's quietStartup setting: if true, pi suppresses the verbose startup prelude.
  * We use it to decide whether to synthesize + emit our own "startup info" message.
  */

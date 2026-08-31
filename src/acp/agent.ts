@@ -42,7 +42,7 @@ import {
 } from './translate/bash.js'
 import { promptToPiMessage } from './translate/prompt.js'
 import { loadSlashCommands, parseCommandArgs, toAvailableCommands } from './slash-commands.js'
-import { getAgentDir, getEnableSkillCommands, getQuietStartup } from './pi-settings.js'
+import { getAgentDir, getEnableSkillCommands, getEnabledModels, getQuietStartup } from './pi-settings.js'
 import { hasExtensionCommand, toAvailableCommandsFromPiGetCommands } from './pi-commands.js'
 import { maybeAuthRequiredError } from './auth-required.js'
 import { isAbsolute } from 'node:path'
@@ -359,7 +359,7 @@ export class PiAcpAgent implements ACPAgent {
     const { configOptions, models, modes } = await getSessionConfiguration(session.proc, {
       state,
       availableModels
-    })
+    }, session.cwd)
 
     const quietStartup = getQuietStartup(params.cwd)
     const updateNotice = buildUpdateNotice()
@@ -1096,7 +1096,7 @@ export class PiAcpAgent implements ACPAgent {
       }
     }
 
-    const { configOptions, models, modes } = await getSessionConfiguration(proc)
+    const { configOptions, models, modes } = await getSessionConfiguration(proc, undefined, session.cwd)
 
     const response = {
       configOptions,
@@ -1174,7 +1174,7 @@ export class PiAcpAgent implements ACPAgent {
   async unstable_setSessionModel(params: { sessionId: string; modelId: string }): Promise<void> {
     const session = await this.restoreSession(params.sessionId)
     await setSessionModel(session.proc, params.modelId)
-    await emitConfigOptionsUpdate(this.conn, session.sessionId, session.proc)
+    await emitConfigOptionsUpdate(this.conn, session.sessionId, session.proc, session.cwd)
     await session.sendUsageUpdate()
   }
 
@@ -1197,7 +1197,7 @@ export class PiAcpAgent implements ACPAgent {
       }
     })
 
-    await emitConfigOptionsUpdate(this.conn, session.sessionId, session.proc)
+    await emitConfigOptionsUpdate(this.conn, session.sessionId, session.proc, session.cwd)
 
     return {}
   }
@@ -1230,7 +1230,7 @@ export class PiAcpAgent implements ACPAgent {
       throw RequestError.invalidParams(`Unknown config option: ${configId}`)
     }
 
-    const configOptions = await emitConfigOptionsUpdate(this.conn, session.sessionId, session.proc)
+    const configOptions = await emitConfigOptionsUpdate(this.conn, session.sessionId, session.proc, session.cwd)
     if (configId === MODEL_CONFIG_ID) await session.sendUsageUpdate()
     return { configOptions }
   }
@@ -1238,6 +1238,60 @@ export class PiAcpAgent implements ACPAgent {
 
 function isThinkingLevel(x: string): x is ThinkingLevel {
   return x === 'off' || x === 'minimal' || x === 'low' || x === 'medium' || x === 'high' || x === 'xhigh'
+}
+
+/** Strip a trailing `:thinking` suffix (e.g. "opencode-go/*:max") from an enabled-models entry, mirroring pi's `resolveModelScope` pattern syntax. */
+function stripThinkingSuffix(entry: string): string {
+  const colon = entry.lastIndexOf(':')
+  if (colon !== -1 && isThinkingLevel(entry.slice(colon + 1))) {
+    return entry.slice(0, colon)
+  }
+  return entry
+}
+
+/** Match an enabled-models entry against a "provider/model" id. `*` does not cross "/" (same as the minimatch default pi uses). */
+function enabledEntryMatches(entry: string, modelId: string): boolean {
+  const id = stripThinkingSuffix(entry)
+  if (!id.includes('*')) return id === modelId
+
+  const segments = id.split('/')
+  const modelSegments = modelId.split('/')
+  if (segments.length !== modelSegments.length) return false
+
+  return segments.every((segment, i) => {
+    if (segment === '*') return true
+    if (!segment.includes('*')) return segment === modelSegments[i]
+
+    const parts = segment.split('*')
+    let rest = modelSegments[i]
+    for (const part of parts) {
+      if (part === '') continue
+      const idx = rest.indexOf(part)
+      if (idx === -1) return false
+      rest = rest.slice(idx + part.length)
+    }
+    return true
+  })
+}
+
+/** Stable partition: models matching the enabled-models list move to the front in the list's order; unmatched models keep their original relative order. */
+function orderModelsByEnabled(models: AdvertisedModel[], enabled: string[]): AdvertisedModel[] {
+  const ranked: AdvertisedModel[] = []
+  const seen = new Set<string>()
+
+  for (const entry of enabled) {
+    for (const model of models) {
+      if (seen.has(model.modelId)) continue
+      if (enabledEntryMatches(entry, model.modelId)) {
+        ranked.push(model)
+        seen.add(model.modelId)
+      }
+    }
+  }
+  for (const model of models) {
+    if (!seen.has(model.modelId)) ranked.push(model)
+  }
+  return ranked
 }
 
 async function getThinkingState(
@@ -1281,7 +1335,8 @@ async function getThinkingState(
 
 async function getSessionConfiguration(
   proc: PiRpcProcess,
-  pre?: { state?: any | null; availableModels?: any | null }
+  pre?: { state?: any | null; availableModels?: any | null },
+  cwd?: string
 ): Promise<{
   configOptions: SessionConfigOption[]
   models: {
@@ -1297,7 +1352,7 @@ async function getSessionConfiguration(
     currentModeId: string
   }
 }> {
-  const [models, modes] = await Promise.all([getModelState(proc, pre), getThinkingState(proc, { state: pre?.state })])
+  const [models, modes] = await Promise.all([getModelState(proc, pre, cwd), getThinkingState(proc, { state: pre?.state })])
 
   return {
     configOptions: buildConfigOptions({ models, modes }),
@@ -1357,7 +1412,8 @@ function buildConfigOptions(state: {
 
 async function getModelState(
   proc: PiRpcProcess,
-  pre?: { state?: any | null; availableModels?: any | null }
+  pre?: { state?: any | null; availableModels?: any | null },
+  cwd?: string
 ): Promise<{
   availableModels: AdvertisedModel[]
   currentModelId: string
@@ -1413,6 +1469,12 @@ async function getModelState(
 
   if (!availableModels.length && !currentModelId) return null
 
+  // Move scoped (enabled) models to the front when configured; keep the rest otherwise.
+  if (cwd) {
+    const enabled = getEnabledModels(cwd)
+    if (enabled) availableModels = orderModelsByEnabled(availableModels, enabled)
+  }
+
   // Fallback if current model is unknown: use first in list.
   if (!currentModelId) currentModelId = availableModels[0]?.modelId ?? 'default'
 
@@ -1425,9 +1487,10 @@ async function getModelState(
 async function emitConfigOptionsUpdate(
   conn: AgentSideConnection,
   sessionId: string,
-  proc: PiRpcProcess
+  proc: PiRpcProcess,
+  cwd?: string
 ): Promise<SessionConfigOption[]> {
-  const { configOptions } = await getSessionConfiguration(proc)
+  const { configOptions } = await getSessionConfiguration(proc, undefined, cwd)
 
   await conn.sessionUpdate({
     sessionId,
