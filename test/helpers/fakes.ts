@@ -29,6 +29,7 @@ export class FakePiRpcProcess {
   readonly prompts: Array<{ message: string; attachments: unknown[] }> = []
   readonly extensionUiResponses: unknown[] = []
   abortCount = 0
+  promptError: unknown = null
   sessionStats: unknown = {}
 
   onEvent(handler: (ev: PiRpcEvent) => void): () => void {
@@ -44,6 +45,7 @@ export class FakePiRpcProcess {
 
   async prompt(message: string, attachments: unknown[] = []): Promise<void> {
     this.prompts.push({ message, attachments })
+    if (this.promptError) throw this.promptError
   }
 
   async abort(): Promise<void> {

@@ -769,6 +769,107 @@ test('PiAcpSession: does not re-emit startup info on first prompt after it was a
   assert.equal(reason, 'end_turn')
 })
 
+test('PiAcpSession: rejects an RPC prompt failure instead of returning an error stop reason', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+  proc.promptError = new Error('pi prompt RPC failed')
+
+  const session = new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  await assert.rejects(session.prompt('hello'), err => {
+    assert.equal((err as any).code, -32603)
+    assert.equal((err as Error).message, 'pi prompt RPC failed')
+    return true
+  })
+})
+
+test('PiAcpSession: rejects a settled model error without emitting it as assistant content', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+
+  const session = new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  const prompt = session.prompt('hello')
+  proc.emit({
+    type: 'message_end',
+    message: {
+      role: 'assistant',
+      content: [],
+      provider: 'opencode-go',
+      model: 'muse-spark-1.2-contributor',
+      stopReason: 'error',
+      errorMessage: 'OpenAI API error (403): DataPolicyError: explicit opt in required'
+    }
+  })
+  proc.emit({ type: 'agent_settled' })
+
+  await assert.rejects(prompt, err => {
+    assert.equal((err as any).code, -32603)
+    assert.equal((err as Error).message, 'OpenAI API error (403): DataPolicyError: explicit opt in required')
+    assert.deepEqual((err as any).data, {
+      provider: 'opencode-go',
+      model: 'muse-spark-1.2-contributor',
+      stopReason: 'error'
+    })
+    return true
+  })
+  assert.equal(
+    conn.updates.some(update => update.update.sessionUpdate === 'agent_message_chunk'),
+    false
+  )
+})
+
+test('PiAcpSession: clears a transient model error when a retry succeeds', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+
+  const session = new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  const prompt = session.prompt('hello')
+  proc.emit({
+    type: 'message_end',
+    message: {
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
+      errorMessage: 'temporary provider error'
+    }
+  })
+  proc.emit({ type: 'auto_retry_start', attempt: 1, maxAttempts: 3, delayMs: 1 })
+  proc.emit({
+    type: 'message_end',
+    message: {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'recovered' }],
+      stopReason: 'stop'
+    }
+  })
+  proc.emit({ type: 'agent_settled' })
+
+  assert.equal(await prompt, 'end_turn')
+})
+
 test('PiAcpSession: cancel flips stopReason to cancelled', async () => {
   const conn = new FakeAgentSideConnection()
   const proc = new FakePiRpcProcess()

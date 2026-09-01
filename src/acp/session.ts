@@ -36,7 +36,7 @@ type SessionCreateParams = {
   approveProject?: boolean
 }
 
-export type StopReason = 'end_turn' | 'cancelled' | 'error'
+export type StopReason = 'end_turn' | 'cancelled'
 
 type QueuedTurn = {
   message: string
@@ -283,6 +283,7 @@ export class PiAcpSession {
 
   // Current in-flight turn (if any). Additional prompts are queued.
   private pendingTurn: QueuedTurn | null = null
+  private pendingModelError: RequestError | null = null
   private readonly turnQueue: QueuedTurn[] = []
   // Track tool call statuses and ensure they are monotonic (pending -> in_progress -> completed).
   // Some pi events can arrive out of order (e.g. late toolcall_* deltas after execution starts),
@@ -408,10 +409,6 @@ export class PiAcpSession {
     await this.proc.abort()
   }
 
-  wasCancelRequested(): boolean {
-    return this.cancelRequested
-  }
-
   private emit(update: SessionUpdate): void {
     // Serialize update delivery.
     this.lastEmit = this.lastEmit
@@ -508,6 +505,7 @@ export class PiAcpSession {
   private startTurn(t: QueuedTurn): void {
     this.cancelRequested = false
     this.inAgentLoop = false
+    this.pendingModelError = null
 
     this.pendingTurn = t
 
@@ -537,12 +535,15 @@ export class PiAcpSession {
           const authErr = maybeAuthRequiredError(err)
           if (authErr) {
             t.reject(authErr)
+          } else if (this.cancelRequested) {
+            t.resolve('cancelled')
           } else {
-            const reason: StopReason = this.cancelRequested ? 'cancelled' : 'error'
-            t.resolve(reason)
+            const message = String((err as any)?.message ?? err ?? 'Pi prompt RPC failed.')
+            t.reject(err instanceof RequestError ? err : new RequestError(-32603, message))
           }
 
           this.pendingTurn = null
+          this.pendingModelError = null
           this.inAgentLoop = false
 
           // If the prompt failed, do not automatically proceed—pi may be unhealthy.
@@ -558,9 +559,21 @@ export class PiAcpSession {
 
   private completeTurn(turn: QueuedTurn, reason: StopReason): void {
     if (this.pendingTurn !== turn) return
-
     turn.resolve(reason)
+    this.finishTurn(turn)
+  }
+
+  private failTurn(turn: QueuedTurn, error: RequestError): void {
+    if (this.pendingTurn !== turn) return
+    turn.reject(error)
+    this.finishTurn(turn)
+  }
+
+  private finishTurn(turn: QueuedTurn): void {
+    if (this.pendingTurn !== turn) return
+
     this.pendingTurn = null
+    this.pendingModelError = null
     this.inAgentLoop = false
 
     const next = this.turnQueue.shift()
@@ -583,6 +596,30 @@ export class PiAcpSession {
     const type = String((ev as any).type ?? '')
 
     switch (type) {
+      case 'message_end': {
+        if (!this.pendingTurn || this.pendingTurn.completion !== 'agent_settled') break
+
+        const message = (ev as any).message as Record<string, unknown> | undefined
+        if (!message || message.role !== 'assistant') break
+
+        if (message.stopReason !== 'error') {
+          // A successful retry supersedes an earlier failed model attempt in the
+          // same prompt. Only surface an error if it is still final at agent_settled.
+          this.pendingModelError = null
+          break
+        }
+
+        const errorMessage = stringProp(message, 'errorMessage') ?? 'Model request failed.'
+        const provider = stringProp(message, 'provider')
+        const model = stringProp(message, 'model')
+        this.pendingModelError = new RequestError(-32603, errorMessage, {
+          ...(provider ? { provider } : {}),
+          ...(model ? { model } : {}),
+          stopReason: 'error'
+        })
+        break
+      }
+
       case 'message_update': {
         const ame = (ev as any).assistantMessageEvent
 
@@ -906,10 +943,21 @@ export class PiAcpSession {
         const turn = this.pendingTurn
         if (!turn || turn.completion !== 'agent_settled') break
 
+        // Snapshot the terminal outcome before the asynchronous usage refresh.
+        // agent_settled means no later retry or message can change this turn.
+        const cancelled = this.cancelRequested
+        const modelError = this.pendingModelError
+
         // Refresh usage after retries, compaction, and queued continuations settle,
         // then deliver every update before resolving the ACP prompt request.
         void this.sendUsageUpdate().finally(() => {
-          this.completeTurn(turn, this.cancelRequested ? 'cancelled' : 'end_turn')
+          if (cancelled) {
+            this.completeTurn(turn, 'cancelled')
+          } else if (modelError) {
+            this.failTurn(turn, modelError)
+          } else {
+            this.completeTurn(turn, 'end_turn')
+          }
         })
         break
       }
