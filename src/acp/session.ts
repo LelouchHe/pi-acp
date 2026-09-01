@@ -4,6 +4,7 @@ import type {
   McpServer,
   PermissionOption,
   SessionUpdate,
+  StopReason as AcpStopReason,
   ToolCallContent,
   ToolCallLocation,
   ToolKind
@@ -36,7 +37,9 @@ type SessionCreateParams = {
   approveProject?: boolean
 }
 
-export type StopReason = 'end_turn' | 'cancelled'
+export type StopReason = AcpStopReason
+
+type TerminalOutcome = { stopReason: StopReason } | { error: RequestError }
 
 type QueuedTurn = {
   message: string
@@ -283,7 +286,7 @@ export class PiAcpSession {
 
   // Current in-flight turn (if any). Additional prompts are queued.
   private pendingTurn: QueuedTurn | null = null
-  private pendingModelError: RequestError | null = null
+  private pendingTerminalOutcome: TerminalOutcome | null = null
   private readonly turnQueue: QueuedTurn[] = []
   // Track tool call statuses and ensure they are monotonic (pending -> in_progress -> completed).
   // Some pi events can arrive out of order (e.g. late toolcall_* deltas after execution starts),
@@ -505,7 +508,7 @@ export class PiAcpSession {
   private startTurn(t: QueuedTurn): void {
     this.cancelRequested = false
     this.inAgentLoop = false
-    this.pendingModelError = null
+    this.pendingTerminalOutcome = null
 
     this.pendingTurn = t
 
@@ -543,7 +546,7 @@ export class PiAcpSession {
           }
 
           this.pendingTurn = null
-          this.pendingModelError = null
+          this.pendingTerminalOutcome = null
           this.inAgentLoop = false
 
           // If the prompt failed, do not automatically proceed—pi may be unhealthy.
@@ -573,7 +576,7 @@ export class PiAcpSession {
     if (this.pendingTurn !== turn) return
 
     this.pendingTurn = null
-    this.pendingModelError = null
+    this.pendingTerminalOutcome = null
     this.inAgentLoop = false
 
     const next = this.turnQueue.shift()
@@ -602,21 +605,45 @@ export class PiAcpSession {
         const message = (ev as any).message as Record<string, unknown> | undefined
         if (!message || message.role !== 'assistant') break
 
-        if (message.stopReason !== 'error') {
-          // A successful retry supersedes an earlier failed model attempt in the
-          // same prompt. Only surface an error if it is still final at agent_settled.
-          this.pendingModelError = null
-          break
-        }
-
-        const errorMessage = stringProp(message, 'errorMessage') ?? 'Model request failed.'
+        const piStopReason = stringProp(message, 'stopReason')
         const provider = stringProp(message, 'provider')
         const model = stringProp(message, 'model')
-        this.pendingModelError = new RequestError(-32603, errorMessage, {
-          ...(provider ? { provider } : {}),
-          ...(model ? { model } : {}),
-          stopReason: 'error'
-        })
+        const error = (fallback: string) =>
+          new RequestError(-32603, stringProp(message, 'errorMessage') ?? fallback, {
+            ...(provider ? { provider } : {}),
+            ...(model ? { model } : {}),
+            stopReason: piStopReason
+          })
+
+        switch (piStopReason) {
+          case 'stop':
+          case 'deferred':
+            this.pendingTerminalOutcome = { stopReason: 'end_turn' }
+            break
+          case 'length':
+            this.pendingTerminalOutcome = { stopReason: 'max_tokens' }
+            break
+          case 'error':
+            this.pendingTerminalOutcome = { error: error('Model request failed.') }
+            break
+          case 'aborted':
+            // ACP cancelled is reserved for an explicit session/cancel request.
+            // A provider-side abort is a failed request, not a successful turn.
+            this.pendingTerminalOutcome = { error: error('Model request aborted.') }
+            break
+          case null:
+          case 'pending':
+          case 'toolUse':
+            // Missing/legacy and intermediate Pi states do not invent an ACP
+            // reason. A later message wins; agent_settled falls back to end_turn.
+            this.pendingTerminalOutcome = null
+            break
+          default:
+            this.pendingTerminalOutcome = {
+              error: error(`Unsupported Pi assistant stop reason: ${String(piStopReason)}`)
+            }
+            break
+        }
         break
       }
 
@@ -946,17 +973,17 @@ export class PiAcpSession {
         // Snapshot the terminal outcome before the asynchronous usage refresh.
         // agent_settled means no later retry or message can change this turn.
         const cancelled = this.cancelRequested
-        const modelError = this.pendingModelError
+        const terminalOutcome = this.pendingTerminalOutcome
 
         // Refresh usage after retries, compaction, and queued continuations settle,
         // then deliver every update before resolving the ACP prompt request.
         void this.sendUsageUpdate().finally(() => {
           if (cancelled) {
             this.completeTurn(turn, 'cancelled')
-          } else if (modelError) {
-            this.failTurn(turn, modelError)
+          } else if (terminalOutcome && 'error' in terminalOutcome) {
+            this.failTurn(turn, terminalOutcome.error)
           } else {
-            this.completeTurn(turn, 'end_turn')
+            this.completeTurn(turn, terminalOutcome?.stopReason ?? 'end_turn')
           }
         })
         break

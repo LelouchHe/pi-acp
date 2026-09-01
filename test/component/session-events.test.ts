@@ -870,6 +870,110 @@ test('PiAcpSession: clears a transient model error when a retry succeeds', async
   assert.equal(await prompt, 'end_turn')
 })
 
+test('PiAcpSession: maps a final length stop to ACP max_tokens', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+  const session = new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  const prompt = session.prompt('hello')
+  proc.emit({
+    type: 'message_end',
+    message: { role: 'assistant', content: [], stopReason: 'length' }
+  })
+  proc.emit({ type: 'agent_settled' })
+
+  assert.equal(await prompt, 'max_tokens')
+})
+
+test('PiAcpSession: rejects a final non-client abort', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+  const session = new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  const prompt = session.prompt('hello')
+  proc.emit({
+    type: 'message_end',
+    message: {
+      role: 'assistant',
+      content: [],
+      provider: 'test-provider',
+      model: 'test-model',
+      stopReason: 'aborted',
+      errorMessage: 'Provider aborted the request.'
+    }
+  })
+  proc.emit({ type: 'agent_settled' })
+
+  await assert.rejects(prompt, err => {
+    assert.equal((err as any).code, -32603)
+    assert.equal((err as Error).message, 'Provider aborted the request.')
+    assert.deepEqual((err as any).data, {
+      provider: 'test-provider',
+      model: 'test-model',
+      stopReason: 'aborted'
+    })
+    return true
+  })
+})
+
+test('PiAcpSession: maps deferred completion to ACP end_turn', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+  const session = new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  const prompt = session.prompt('hello')
+  proc.emit({
+    type: 'message_end',
+    message: { role: 'assistant', content: [], stopReason: 'deferred' }
+  })
+  proc.emit({ type: 'agent_settled' })
+
+  assert.equal(await prompt, 'end_turn')
+})
+
+test('PiAcpSession: tolerates a missing final Pi stop reason', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+  const session = new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  const prompt = session.prompt('hello')
+  proc.emit({
+    type: 'message_end',
+    message: { role: 'assistant', content: [] }
+  })
+  proc.emit({ type: 'agent_settled' })
+
+  assert.equal(await prompt, 'end_turn')
+})
+
 test('PiAcpSession: cancel flips stopReason to cancelled', async () => {
   const conn = new FakeAgentSideConnection()
   const proc = new FakePiRpcProcess()
@@ -885,6 +989,15 @@ test('PiAcpSession: cancel flips stopReason to cancelled', async () => {
 
   const p = session.prompt('hello')
   await session.cancel()
+  proc.emit({
+    type: 'message_end',
+    message: {
+      role: 'assistant',
+      content: [],
+      stopReason: 'aborted',
+      errorMessage: 'Request aborted by signal.'
+    }
+  })
   proc.emit({ type: 'agent_start' })
   proc.emit({ type: 'turn_end' })
   proc.emit({ type: 'agent_end' })
