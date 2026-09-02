@@ -7,6 +7,8 @@ export type PiMcpServerDefinition = {
   url?: string
   headers?: Record<string, string>
   httpTransport?: 'sse'
+  /** Promote this server's tools into the agent's native tool surface. */
+  directTools?: boolean | string[]
 }
 
 export type PiMcpServerDefinitions = Record<string, PiMcpServerDefinition>
@@ -90,10 +92,15 @@ export function translateAcpMcpServers(mcpServers: readonly McpServer[]): PiMcpS
     if (typeof value.url !== 'string' || value.url === '')
       invalid(`${value.type} server ${JSON.stringify(name)} url must be a non-empty string`)
 
+    const directTools = value.directTools
+    if (directTools !== undefined && typeof directTools !== 'boolean' && !Array.isArray(directTools))
+      invalid(`server ${JSON.stringify(value.name)} directTools must be a boolean or array of tool names`)
+
     definitions[name] = {
       url: value.url,
       headers: toHeaders(value.headers),
-      ...(value.type === 'sse' ? { httpTransport: 'sse' as const } : {})
+      ...(value.type === 'sse' ? { httpTransport: 'sse' as const } : {}),
+      ...(directTools !== undefined ? { directTools } : {})
     }
   }
 

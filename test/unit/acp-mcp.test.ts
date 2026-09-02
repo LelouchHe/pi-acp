@@ -17,7 +17,8 @@ test('translateAcpMcpServers translates standard stdio, HTTP, and SSE servers', 
       type: 'http',
       name: 'remote-tools',
       url: 'https://example.test/mcp',
-      headers: [{ name: 'Authorization', value: 'Bearer token' }]
+      headers: [{ name: 'Authorization', value: 'Bearer token' }],
+      directTools: true
     },
     {
       type: 'sse',
@@ -35,7 +36,8 @@ test('translateAcpMcpServers translates standard stdio, HTTP, and SSE servers', 
     },
     'remote-tools': {
       url: 'https://example.test/mcp',
-      headers: { Authorization: 'Bearer token' }
+      headers: { Authorization: 'Bearer token' },
+      directTools: true
     },
     'legacy-tools': {
       url: 'https://example.test/sse',
@@ -77,7 +79,8 @@ test('PiAcpAgent advertises and forwards standard ACP MCP servers to a Pi subpro
           type: 'http',
           name: 'remote-tools',
           url: 'https://example.test/mcp',
-          headers: [{ name: 'Authorization', value: 'Bearer token' }]
+          headers: [{ name: 'Authorization', value: 'Bearer token' }],
+          directTools: ['echo']
         }
       ]
     } as any)
@@ -89,7 +92,8 @@ test('PiAcpAgent advertises and forwards standard ACP MCP servers to a Pi subpro
         mcpServers: {
           'remote-tools': {
             url: 'https://example.test/mcp',
-            headers: { Authorization: 'Bearer token' }
+            headers: { Authorization: 'Bearer token' },
+            directTools: ['echo']
           }
         }
       }
