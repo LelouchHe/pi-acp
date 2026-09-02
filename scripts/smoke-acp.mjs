@@ -19,8 +19,38 @@ child.stdout.on('data', chunk => {
   process.stdout.write(chunk)
 })
 
+let completed = false
+
+function describeError(error) {
+  if (!error || typeof error !== 'object') return String(error)
+  const message = typeof error.message === 'string' ? error.message : JSON.stringify(error)
+  const data = error.data === undefined ? '' : ` data=${JSON.stringify(error.data)}`
+  return `${message}${data}`
+}
+
+function fail(reason) {
+  if (completed) return
+  completed = true
+  process.stderr.write(`ACP smoke failed: ${reason}\n`)
+  child.kill('SIGTERM')
+  process.exitCode = 1
+}
+
+child.on('error', error => {
+  fail(`could not start pi-acp: ${error instanceof Error ? error.message : String(error)}`)
+})
+
+child.on('exit', (code, signal) => {
+  if (!completed) fail(`pi-acp exited before smoke completed (code=${code}, signal=${signal})`)
+})
+
 function send(obj) {
-  child.stdin.write(JSON.stringify(obj) + '\n')
+  if (completed) return
+  try {
+    child.stdin.write(JSON.stringify(obj) + '\n')
+  } catch (error) {
+    fail(`could not send ${obj.method ?? 'request'}: ${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 
 // Basic ACP handshake + one prompt.
@@ -44,7 +74,16 @@ child.stdout.on('data', chunk => {
       continue
     }
 
-    if (msg?.id === 2 && msg?.result?.sessionId && !sessionId) {
+    if (msg?.error) {
+      fail(`request ${msg.id ?? '<notification>'}: ${describeError(msg.error)}`)
+      continue
+    }
+
+    if (msg?.id === 2 && !sessionId) {
+      if (typeof msg.result?.sessionId !== 'string' || msg.result.sessionId.length === 0) {
+        fail('session/new returned no sessionId')
+        continue
+      }
       sessionId = msg.result.sessionId
       send({
         jsonrpc: '2.0',
@@ -58,7 +97,8 @@ child.stdout.on('data', chunk => {
     }
 
     if (msg?.id === 3) {
-      // Turn finished.
+      // Turn finished successfully.
+      completed = true
       setTimeout(() => child.kill('SIGTERM'), 50)
     }
   }
