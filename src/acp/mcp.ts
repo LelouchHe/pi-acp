@@ -66,6 +66,18 @@ function toHeaders(entries: unknown): Record<string, string> {
  * runtime-registration shape. This is intentionally process-local and does
  * not read or write any MCP configuration files.
  */
+function directToolsFromMeta(value: Record<string, unknown>): boolean | string[] | undefined {
+  const meta = value._meta
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return undefined
+
+  const directTools = (meta as Record<string, unknown>).directTools
+  if (directTools === undefined) return undefined
+  if (typeof directTools === 'boolean') return directTools
+  if (Array.isArray(directTools) && directTools.every(tool => typeof tool === 'string'))
+    return [...directTools] as string[]
+  invalid('MCP _meta.directTools must be a boolean or array of tool names')
+}
+
 export function translateAcpMcpServers(mcpServers: readonly McpServer[]): PiMcpServerDefinitions {
   const definitions: PiMcpServerDefinitions = {}
 
@@ -73,6 +85,7 @@ export function translateAcpMcpServers(mcpServers: readonly McpServer[]): PiMcpS
     const value = server as unknown as Record<string, unknown>
     const name = requireName(value.name)
     if (Object.hasOwn(definitions, name)) invalid(`duplicate MCP server name ${JSON.stringify(name)}`)
+    const directTools = directToolsFromMeta(value)
 
     if (value.type === undefined) {
       if (typeof value.command !== 'string' || value.command === '')
@@ -82,7 +95,8 @@ export function translateAcpMcpServers(mcpServers: readonly McpServer[]): PiMcpS
       definitions[name] = {
         command: value.command,
         args: [...value.args] as string[],
-        env: toEnvironment(value.env)
+        env: toEnvironment(value.env),
+        ...(directTools !== undefined ? { directTools } : {})
       }
       continue
     }
@@ -91,10 +105,6 @@ export function translateAcpMcpServers(mcpServers: readonly McpServer[]): PiMcpS
     if (value.type !== 'http' && value.type !== 'sse') invalid(`unsupported transport ${JSON.stringify(value.type)}`)
     if (typeof value.url !== 'string' || value.url === '')
       invalid(`${value.type} server ${JSON.stringify(name)} url must be a non-empty string`)
-
-    const directTools = value.directTools
-    if (directTools !== undefined && typeof directTools !== 'boolean' && !Array.isArray(directTools))
-      invalid(`server ${JSON.stringify(value.name)} directTools must be a boolean or array of tool names`)
 
     definitions[name] = {
       url: value.url,

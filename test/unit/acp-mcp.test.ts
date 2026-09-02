@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { AgentSideConnection, ClientSideConnection, ndJsonStream } from '@agentclientprotocol/sdk'
 import { translateAcpMcpServers } from '../../src/acp/mcp.js'
 import { PiAcpAgent } from '../../src/acp/agent.js'
 import { PiRpcProcess } from '../../src/pi-rpc/process.js'
@@ -18,7 +19,7 @@ test('translateAcpMcpServers translates standard stdio, HTTP, and SSE servers', 
       name: 'remote-tools',
       url: 'https://example.test/mcp',
       headers: [{ name: 'Authorization', value: 'Bearer token' }],
-      directTools: true
+      _meta: { directTools: true }
     },
     {
       type: 'sse',
@@ -80,7 +81,7 @@ test('PiAcpAgent advertises and forwards standard ACP MCP servers to a Pi subpro
           name: 'remote-tools',
           url: 'https://example.test/mcp',
           headers: [{ name: 'Authorization', value: 'Bearer token' }],
-          directTools: ['echo']
+          _meta: { directTools: ['echo'] }
         }
       ]
     } as any)
@@ -101,6 +102,73 @@ test('PiAcpAgent advertises and forwards standard ACP MCP servers to a Pi subpro
     agent.dispose()
   } finally {
     PiRpcProcess.spawn = originalSpawn
+  }
+})
+
+test('AgentSideConnection preserves _meta directTools through real session/new parsing', async () => {
+  const originalSpawn = PiRpcProcess.spawn
+  const spawnCalls: unknown[] = []
+  ;(PiRpcProcess as any).spawn = async (params: unknown) => {
+    spawnCalls.push(params)
+    return {
+      onEvent: () => () => {},
+      async getState() {
+        return { sessionId: 'meta-session' }
+      },
+      async getAvailableModels() {
+        return { models: [{ provider: 'test', id: 'model', name: 'model' }] }
+      },
+      async getSessionStats() {
+        return {}
+      },
+      dispose() {}
+    }
+  }
+
+  const clientToAgent = new TransformStream()
+  const agentToClient = new TransformStream()
+  const agentConnection = new AgentSideConnection(
+    conn => new PiAcpAgent(conn),
+    ndJsonStream(agentToClient.writable, clientToAgent.readable)
+  )
+  void agentConnection
+  const clientConnection = new ClientSideConnection(
+    () => ({
+      async requestPermission() {
+        return { outcome: { outcome: 'cancelled' } }
+      },
+      async sessionUpdate() {}
+    }) as any,
+    ndJsonStream(clientToAgent.writable, agentToClient.readable)
+  )
+
+  try {
+    await clientConnection.newSession({
+      cwd: '/tmp/project',
+      mcpServers: [
+        {
+          type: 'http',
+          name: 'webagent-task',
+          url: 'http://127.0.0.1:6800/mcp',
+          headers: [{ name: 'Authorization', value: 'Bearer token' }],
+          directTools: false,
+          _meta: { directTools: true }
+        }
+      ]
+    } as any)
+    assert.deepEqual(spawnCalls[0], {
+      cwd: '/tmp/project',
+      piCommand: process.env.PI_ACP_PI_COMMAND,
+      mcpServers: {
+        'webagent-task': {
+          url: 'http://127.0.0.1:6800/mcp',
+          headers: { Authorization: 'Bearer token' },
+          directTools: true
+        }
+      }
+    })
+  } finally {
+    ;(PiRpcProcess as any).spawn = originalSpawn
   }
 })
 
