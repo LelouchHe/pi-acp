@@ -21,10 +21,12 @@ import {
   type SetSessionModeResponse,
   type StopReason,
   type DeleteSessionRequest,
-  type DeleteSessionResponse
+  type DeleteSessionResponse,
+  type McpServer
 } from '@agentclientprotocol/sdk'
 import { getAuthMethods } from './auth.js'
 import { SessionManager, type PiAcpSession } from './session.js'
+import { translateAcpMcpServers, type PiMcpServerDefinitions } from './mcp.js'
 import { SessionStore } from './session-store.js'
 import { PiRpcProcess } from '../pi-rpc/process.js'
 import { listPiSessions, findPiSession } from './pi-sessions.js'
@@ -60,6 +62,14 @@ type AdvertisedModel = {
 
 const MODEL_CONFIG_ID = 'model'
 const THOUGHT_LEVEL_CONFIG_ID = 'thought_level'
+
+function toPiMcpServerDefinitions(mcpServers: McpServer[]): PiMcpServerDefinitions {
+  try {
+    return translateAcpMcpServers(mcpServers)
+  } catch (error) {
+    throw RequestError.invalidParams(error instanceof Error ? error.message : String(error))
+  }
+}
 
 function builtinAvailableCommands(): AvailableCommand[] {
   return [
@@ -188,7 +198,7 @@ export class PiAcpAgent implements ACPAgent {
 
   private async restoreSession(
     sessionId: string,
-    opts?: { cwd?: string; mcpServers?: LoadSessionRequest['mcpServers'] }
+    opts?: { cwd?: string; mcpServers?: PiMcpServerDefinitions }
   ): Promise<PiAcpSession> {
     const existing = this.sessions.maybeGet(sessionId)
     if (existing) return existing
@@ -210,6 +220,7 @@ export class PiAcpAgent implements ACPAgent {
           cwd,
           sessionPath: stored.sessionFile,
           piCommand: process.env.PI_ACP_PI_COMMAND,
+          ...(opts?.mcpServers && Object.keys(opts.mcpServers).length > 0 ? { mcpServers: opts.mcpServers } : {}),
           ...(this.approveProject ? { approveProject: true } : {})
         })
       } catch (e: any) {
@@ -222,7 +233,7 @@ export class PiAcpAgent implements ACPAgent {
       const fileCommands = loadSlashCommands(cwd)
       const session = this.sessions.getOrCreate(sessionId, {
         cwd,
-        mcpServers: opts?.mcpServers ?? [],
+        mcpServers: opts?.mcpServers ?? {},
         conn: this.conn,
         proc,
         fileCommands
@@ -262,7 +273,7 @@ export class PiAcpAgent implements ACPAgent {
       }),
       agentCapabilities: {
         loadSession: true,
-        mcpCapabilities: { http: false, sse: false },
+        mcpCapabilities: { http: true, sse: true },
         promptCapabilities: {
           image: true,
           audio: false,
@@ -288,10 +299,9 @@ export class PiAcpAgent implements ACPAgent {
     const fileCommands = loadSlashCommands(params.cwd)
     const enableSkillCommands = getEnableSkillCommands(params.cwd)
 
-    // Pi doesn't support mcpServers, but we accept and store.
     const session = await this.sessions.create({
       cwd: params.cwd,
-      mcpServers: params.mcpServers,
+      mcpServers: toPiMcpServerDefinitions(params.mcpServers),
       conn: this.conn,
       fileCommands,
       piCommand: process.env.PI_ACP_PI_COMMAND,
@@ -356,10 +366,14 @@ export class PiAcpAgent implements ACPAgent {
       )
     }
 
-    const { configOptions, models, modes } = await getSessionConfiguration(session.proc, {
-      state,
-      availableModels
-    }, session.cwd)
+    const { configOptions, models, modes } = await getSessionConfiguration(
+      session.proc,
+      {
+        state,
+        availableModels
+      },
+      session.cwd
+    )
 
     const quietStartup = getQuietStartup(params.cwd)
     const updateNotice = buildUpdateNotice()
@@ -954,6 +968,7 @@ export class PiAcpAgent implements ACPAgent {
     if (!isAbsolute(params.cwd)) {
       throw RequestError.invalidParams(`cwd must be an absolute path: ${params.cwd}`)
     }
+    const mcpServers = toPiMcpServerDefinitions(params.mcpServers)
 
     // If the client is re-loading a session that is already active, tear down the existing
     // pi subprocess so we can start fresh and re-advertise commands reliably.
@@ -970,7 +985,7 @@ export class PiAcpAgent implements ACPAgent {
     const enableSkillCommands = getEnableSkillCommands(params.cwd)
     const session = await this.restoreSession(params.sessionId, {
       cwd: params.cwd,
-      mcpServers: params.mcpServers
+      mcpServers
     })
     const proc = session.proc
     const fileCommands = loadSlashCommands(params.cwd)
@@ -1346,7 +1361,10 @@ async function getSessionConfiguration(
     currentModeId: string
   }
 }> {
-  const [models, modes] = await Promise.all([getModelState(proc, pre, cwd), getThinkingState(proc, { state: pre?.state })])
+  const [models, modes] = await Promise.all([
+    getModelState(proc, pre, cwd),
+    getThinkingState(proc, { state: pre?.state })
+  ])
 
   return {
     configOptions: buildConfigOptions({ models, modes }),

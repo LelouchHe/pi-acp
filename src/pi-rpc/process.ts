@@ -1,5 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import * as readline from 'node:readline'
+import { fileURLToPath } from 'node:url'
+import type { PiMcpServerDefinitions } from '../acp/mcp.js'
 import { getPiCommand, shouldUseShellForPiCommand } from './command.js'
 
 export class PiRpcSpawnError extends Error {
@@ -68,6 +70,8 @@ type PiExtensionUiResponse =
 
 export type PiRpcEvent = Record<string, unknown>
 
+type StartupExtensionError = { extensionPath?: string; message: string }
+
 type SpawnParams = {
   cwd: string
   /** Optional override for `pi` executable name/path */
@@ -76,12 +80,24 @@ type SpawnParams = {
   sessionPath?: string
   /** Trust project-local Pi settings and resources for this subprocess. */
   approveProject?: boolean
+  /** Standard ACP MCP servers translated for pi-mcp-adapter runtime registration. */
+  mcpServers?: PiMcpServerDefinitions
 }
 
-export function buildPiArgs(params: Pick<SpawnParams, 'sessionPath' | 'approveProject'>): string[] {
+const ACP_MCP_SERVERS_ENV = 'PI_ACP_MCP_SERVERS'
+
+function acpMcpBridgePath(): string {
+  const filename = import.meta.url.endsWith('.ts') ? '../acp-mcp-bridge.ts' : './acp-mcp-bridge.js'
+  return fileURLToPath(new URL(filename, import.meta.url))
+}
+
+export function buildPiArgs(
+  params: Pick<SpawnParams, 'sessionPath' | 'approveProject'> & { mcpBridgePath?: string }
+): string[] {
   const args = ['--mode', 'rpc', '--no-themes']
   if (params.approveProject) args.push('--approve')
   if (params.sessionPath) args.push('--session', params.sessionPath)
+  if (params.mcpBridgePath) args.push('--extension', params.mcpBridgePath)
   return args
 }
 
@@ -90,6 +106,7 @@ export class PiRpcProcess {
   private readonly pending = new Map<string, { resolve: (v: PiRpcResponse) => void; reject: (e: unknown) => void }>()
   private eventHandlers: Array<(ev: PiRpcEvent) => void> = []
   private readonly preludeLines: string[] = []
+  private readonly startupExtensionErrors: StartupExtensionError[] = []
 
   private constructor(child: ChildProcessWithoutNullStreams) {
     this.child = child
@@ -120,7 +137,14 @@ export class PiRpcProcess {
         }
       }
 
-      for (const h of this.eventHandlers) h(msg as PiRpcEvent)
+      const event = msg as PiRpcEvent
+      if (event.type === 'extension_error' && typeof event.error === 'string') {
+        this.startupExtensionErrors.push({
+          ...(typeof event.extensionPath === 'string' ? { extensionPath: event.extensionPath } : {}),
+          message: event.error
+        })
+      }
+      for (const h of this.eventHandlers) h(event)
     })
 
     child.on('exit', (code, signal) => {
@@ -143,12 +167,20 @@ export class PiRpcProcess {
     // - themes are irrelevant in rpc mode and can be noisy/slow to load.
     // Keep extensions + prompt templates enabled because ACP users may rely on them
     // (e.g. MCP extensions, prompt templates for workflows).
-    const args = buildPiArgs(params)
+    const hasMcpServers = Object.keys(params.mcpServers ?? {}).length > 0
+    const mcpBridgePath = hasMcpServers ? acpMcpBridgePath() : undefined
+    const args = buildPiArgs({
+      ...params,
+      ...(mcpBridgePath ? { mcpBridgePath } : {})
+    })
+    const env = hasMcpServers
+      ? { ...process.env, [ACP_MCP_SERVERS_ENV]: Buffer.from(JSON.stringify(params.mcpServers)).toString('base64url') }
+      : process.env
 
     const child = spawn(cmd, args, {
       cwd: params.cwd,
       stdio: 'pipe',
-      env: process.env,
+      env,
       shell: shouldUseShellForPiCommand(cmd)
     })
 
@@ -210,7 +242,23 @@ export class PiRpcProcess {
       // ignore for now
     }
 
+    const mcpBridgeError = proc.takeStartupMcpBridgeError(mcpBridgePath)
+    if (mcpBridgeError) {
+      proc.dispose()
+      throw new PiRpcSpawnError(mcpBridgeError)
+    }
+
     return proc
+  }
+
+  takeStartupMcpBridgeError(extensionPath?: string): string | undefined {
+    const index = this.startupExtensionErrors.findIndex(
+      error =>
+        error.message.startsWith('pi-acp MCP bridge:') ||
+        (extensionPath !== undefined && error.extensionPath === extensionPath)
+    )
+    if (index < 0) return undefined
+    return this.startupExtensionErrors.splice(index, 1)[0]?.message
   }
 
   onEvent(handler: (ev: PiRpcEvent) => void): () => void {

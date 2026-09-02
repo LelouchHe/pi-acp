@@ -104,9 +104,11 @@ test('PiAcpAgent: loadSession only replaces the requested live session', async (
   const sessions = new MultiSessionFakeSessions(null)
   sessions.sessions.set('loaded-session', { sessionId: 'loaded-session' })
   const originalSpawn = PiRpcProcess.spawn
+  const spawnCalls: unknown[] = []
 
-  ;(PiRpcProcess as any).spawn = async () =>
-    ({
+  ;(PiRpcProcess as any).spawn = async (params: unknown) => {
+    spawnCalls.push(params)
+    return {
       onEvent: () => () => {},
       getMessages: async () => ({ messages: [] }),
       getState: async () => ({
@@ -117,7 +119,8 @@ test('PiAcpAgent: loadSession only replaces the requested live session', async (
         models: [{ provider: 'test', id: 'model', name: 'Model' }]
       }),
       getCommands: async () => ({ commands: [] })
-    }) as any
+    } as any
+  }
 
   try {
     const agent = new PiAcpAgent(asAgentConn(conn), {} as any)
@@ -137,10 +140,31 @@ test('PiAcpAgent: loadSession only replaces the requested live session', async (
     await agent.loadSession({
       sessionId: 'loaded-session',
       cwd: process.cwd(),
-      mcpServers: []
+      mcpServers: [
+        {
+          type: 'sse',
+          name: 'restored-tools',
+          url: 'https://example.test/sse',
+          headers: []
+        }
+      ]
     } as any)
 
     assert.deepEqual(sessions.closed, ['loaded-session'])
+    assert.deepEqual(spawnCalls, [
+      {
+        cwd: process.cwd(),
+        sessionPath: '/tmp/loaded-session.jsonl',
+        piCommand: process.env.PI_ACP_PI_COMMAND,
+        mcpServers: {
+          'restored-tools': {
+            url: 'https://example.test/sse',
+            headers: {},
+            httpTransport: 'sse'
+          }
+        }
+      }
+    ])
     assert.equal(sessions.sessions.has('existing-session'), true)
     assert.equal(sessions.sessions.has('loaded-session'), true)
   } finally {

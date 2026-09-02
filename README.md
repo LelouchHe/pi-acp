@@ -11,6 +11,7 @@ This fork adds behavior needed by multi-session ACP clients such as WebAgent:
 - Supports opt-in forwarding of Pi extension slash commands with `pi-acp --extension-commands`.
 - Orders the advertised model list by Pi's `enabledModels` (the `/scoped-models` selection): models configured there move to the front in that order, unmatched models keep their original order. Unconfigured, the list stays unchanged. Configure via `~/.pi/agent/settings.json`, e.g. `"enabledModels": ["opencode-go/deepseek-v4-flash", "opencode-go/glm-5.3-flash"]` (entries support `*` globs and `:thinking` suffixes).
 - Maps Pi turn outcomes to standard ACP semantics without model-specific rules: `stop` and Pi's asynchronous `deferred` completion become `end_turn`, `length` becomes `max_tokens`, an explicit ACP cancellation becomes `cancelled`, and final Pi `error` or non-client `aborted` outcomes reject `session/prompt` with a standard JSON-RPC error. Intermediate `pending` and `toolUse` outcomes do not end the ACP turn.
+- With [`pi-mcp-adapter`](https://github.com/nicobailon/pi-mcp-adapter) installed and enabled in Pi, forwards standard ACP `session/new` and `session/load` MCP server definitions (`stdio`, HTTP, and SSE) as session-scoped runtime registrations. It does not write MCP configuration files or replace the user's existing Pi MCP configuration.
 
 ---
 

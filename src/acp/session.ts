@@ -1,7 +1,6 @@
 import type {
   AgentSideConnection,
   ContentBlock,
-  McpServer,
   PermissionOption,
   SessionUpdate,
   StopReason as AcpStopReason,
@@ -13,6 +12,7 @@ import { RequestError } from '@agentclientprotocol/sdk'
 import { readFileSync } from 'node:fs'
 import { isAbsolute, resolve as resolvePath } from 'node:path'
 import { PiRpcProcess, PiRpcSpawnError, type PiRpcEvent } from '../pi-rpc/process.js'
+import type { PiMcpServerDefinitions } from './mcp.js'
 import { maybeAuthRequiredError } from './auth-required.js'
 import { SessionStore } from './session-store.js'
 import { expandSlashCommand, type FileSlashCommand } from './slash-commands.js'
@@ -30,7 +30,7 @@ import { toolResultToText } from './translate/pi-tools.js'
 
 type SessionCreateParams = {
   cwd: string
-  mcpServers: McpServer[]
+  mcpServers: PiMcpServerDefinitions
   conn: AgentSideConnection
   fileCommands?: import('./slash-commands.js').FileSlashCommand[]
   piCommand?: string
@@ -204,6 +204,7 @@ export class SessionManager {
       proc = await PiRpcProcess.spawn({
         cwd: params.cwd,
         piCommand: params.piCommand,
+        mcpServers: params.mcpServers,
         ...(params.approveProject ? { approveProject: true } : {})
       })
     } catch (e) {
@@ -271,7 +272,9 @@ export class SessionManager {
 export class PiAcpSession {
   readonly sessionId: string
   readonly cwd: string
-  readonly mcpServers: McpServer[]
+  // Retained only for backward-compatible construction in adapter tests; MCP
+  // credentials are never persisted outside this live Pi subprocess.
+  readonly mcpServers: unknown
 
   private startupInfo: string | null = null
   private startupInfoSent = false
@@ -313,7 +316,7 @@ export class PiAcpSession {
   constructor(opts: {
     sessionId: string
     cwd: string
-    mcpServers: McpServer[]
+    mcpServers: unknown
     proc: PiRpcProcess
     conn: AgentSideConnection
     fileCommands?: FileSlashCommand[]
