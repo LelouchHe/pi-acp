@@ -9,7 +9,33 @@ test('promptToPiMessage: concatenates text and resource links', () => {
     { type: 'text', text: ' world' }
   ])
 
-  assert.equal(message, 'Hello\n[Context] file:///tmp/foo.txt world')
+  assert.equal(message, 'Hello\n[Context] file:///tmp/foo.txt\n world')
+  assert.deepEqual(images, [])
+})
+
+test('promptToPiMessage: keeps text following a resource link on its own line', () => {
+  const { message, images } = promptToPiMessage([
+    { type: 'text', text: 'convert the attached file to png first' },
+    {
+      type: 'resource_link',
+      uri: 'file:///tmp/photo.heic',
+      name: 'photo.heic',
+      mimeType: 'image/heic'
+    },
+    { type: 'text', text: 'describe this image' }
+  ])
+
+  assert.equal(message, 'convert the attached file to png first\n[Context] file:///tmp/photo.heic\ndescribe this image')
+  assert.deepEqual(images, [])
+})
+
+test('promptToPiMessage: concatenates consecutive text blocks verbatim', () => {
+  const { message, images } = promptToPiMessage([
+    { type: 'text', text: 'Hello' },
+    { type: 'text', text: ' world' }
+  ])
+
+  assert.equal(message, 'Hello world')
   assert.deepEqual(images, [])
 })
 

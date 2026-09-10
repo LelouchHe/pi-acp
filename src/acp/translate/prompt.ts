@@ -11,11 +11,17 @@ export function promptToPiMessage(blocks: ContentBlock[]): {
   images: PiImage[]
 } {
   let message = ''
+  let previousAppendedText = false
   const images: PiImage[] = []
 
   for (const b of blocks) {
     switch (b.type) {
       case 'text':
+        // The markers below are line-oriented and prefix their own newline, so
+        // text arriving after one would run into it (`[Context] file:///x` +
+        // `describe this`). Close that open line first; consecutive text blocks
+        // still concatenate verbatim.
+        if (!previousAppendedText && message.length > 0 && !message.endsWith('\n')) message += '\n'
         message += b.text
         break
 
@@ -65,6 +71,8 @@ export function promptToPiMessage(blocks: ContentBlock[]): {
         // Ignore unknown block types for now.
         break
     }
+
+    previousAppendedText = b.type === 'text' && b.text.length > 0
   }
 
   return { message, images }

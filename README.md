@@ -13,6 +13,7 @@ This fork adds behavior needed by multi-session ACP clients such as WebAgent:
 - Maps Pi turn outcomes to standard ACP semantics without model-specific rules: `stop` and Pi's asynchronous `deferred` completion become `end_turn`, `length` becomes `max_tokens`, an explicit ACP cancellation becomes `cancelled`, and final Pi `error` or non-client `aborted` outcomes reject `session/prompt` with a standard JSON-RPC error. Intermediate `pending` and `toolUse` outcomes do not end the ACP turn.
 - With [`pi-mcp-adapter`](https://github.com/nicobailon/pi-mcp-adapter) installed and enabled in Pi, forwards standard ACP `session/new` and `session/load` MCP server definitions (`stdio`, HTTP, and SSE) as session-scoped runtime registrations. It does not write MCP configuration files or replace the user's existing Pi MCP configuration. It also preserves the optional per-server `_meta.directTools` hint and translates it only into the adapter's internal direct-tool setting; ACP MCP servers without that hint retain the adapter's normal proxy/lazy behavior.
 - The ACP smoke runner reports JSON-RPC error responses, malformed session responses, startup failures, and premature child exits instead of waiting indefinitely for a successful session/prompt sequence.
+- Renders non-text prompt blocks (resource links, embedded context, audio markers) as their own lines, so text that follows one no longer runs into the marker (e.g. `[Context] file:///…` + the user's prompt); consecutive text blocks still concatenate unchanged.
 
 ---
 
