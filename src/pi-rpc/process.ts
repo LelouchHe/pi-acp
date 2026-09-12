@@ -70,8 +70,6 @@ type PiExtensionUiResponse =
 
 export type PiRpcEvent = Record<string, unknown>
 
-type StartupExtensionError = { extensionPath?: string; message: string }
-
 type SpawnParams = {
   cwd: string
   /** Optional override for `pi` executable name/path */
@@ -106,7 +104,6 @@ export class PiRpcProcess {
   private readonly pending = new Map<string, { resolve: (v: PiRpcResponse) => void; reject: (e: unknown) => void }>()
   private eventHandlers: Array<(ev: PiRpcEvent) => void> = []
   private readonly preludeLines: string[] = []
-  private readonly startupExtensionErrors: StartupExtensionError[] = []
 
   private constructor(child: ChildProcessWithoutNullStreams) {
     this.child = child
@@ -139,10 +136,10 @@ export class PiRpcProcess {
 
       const event = msg as PiRpcEvent
       if (event.type === 'extension_error' && typeof event.error === 'string') {
-        this.startupExtensionErrors.push({
-          ...(typeof event.extensionPath === 'string' ? { extensionPath: event.extensionPath } : {}),
-          message: event.error
-        })
+        // Session MCP servers are best effort: the bridge reports whatever did
+        // not attach here, and the session continues either way. Log it so an
+        // operator can see why the session has no task tooling.
+        if (event.error.startsWith('pi-acp MCP bridge:')) console.error(event.error)
       }
       for (const h of this.eventHandlers) h(event)
     })
@@ -242,23 +239,7 @@ export class PiRpcProcess {
       // ignore for now
     }
 
-    const mcpBridgeError = proc.takeStartupMcpBridgeError(mcpBridgePath)
-    if (mcpBridgeError) {
-      proc.dispose()
-      throw new PiRpcSpawnError(mcpBridgeError)
-    }
-
     return proc
-  }
-
-  takeStartupMcpBridgeError(extensionPath?: string): string | undefined {
-    const index = this.startupExtensionErrors.findIndex(
-      error =>
-        error.message.startsWith('pi-acp MCP bridge:') ||
-        (extensionPath !== undefined && error.extensionPath === extensionPath)
-    )
-    if (index < 0) return undefined
-    return this.startupExtensionErrors.splice(index, 1)[0]?.message
   }
 
   onEvent(handler: (ev: PiRpcEvent) => void): () => void {

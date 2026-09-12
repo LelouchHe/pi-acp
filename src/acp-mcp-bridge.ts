@@ -14,8 +14,18 @@ type PiExtensionApi = {
   on(event: 'session_start' | 'session_shutdown', listener: () => void | Promise<void>): void
 }
 
+/**
+ * Session-scoped MCP servers are best effort: anything that does not attach is
+ * reported by throwing, which the host turns into a logged warning. The session
+ * itself must keep working either way, so a failure here never discards the
+ * registrations that did succeed.
+ */
 function fail(message: string): never {
   throw new Error(`pi-acp MCP bridge: ${message}`)
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function readDefinitions(): Record<string, Record<string, unknown>> {
@@ -39,26 +49,35 @@ function readDefinitions(): Record<string, Record<string, unknown>> {
 
 /**
  * This extension intentionally does not implement MCP. It transfers standard
- * ACP session-scoped definitions from pi-acp to an already-loaded
- * pi-mcp-adapter instance without reading or writing MCP configuration files.
+ * ACP session-scoped definitions from pi-acp to whichever installed Pi
+ * extension handles them, without reading or writing MCP configuration files.
  */
 export default function acpMcpBridge(pi: PiExtensionApi): void {
-  const definitions = readDefinitions()
   const registrations: Registration[] = []
 
   pi.on('session_start', async () => {
-    try {
-      for (const [name, definition] of Object.entries(definitions)) {
-        const request: RuntimeRegistrationRequest = { version: 1, name, definition }
-        pi.events.emit(REGISTER_EVENT, request)
-        if (!request.result) fail('pi-mcp-adapter is not installed or enabled')
-        if (!request.result.ok) throw request.result.error
-        registrations.push(request.result.registration)
+    const definitions = readDefinitions()
+    const names = Object.keys(definitions)
+    const failures: string[] = []
+
+    for (const [name, definition] of Object.entries(definitions)) {
+      const request: RuntimeRegistrationRequest = { version: 1, name, definition }
+      pi.events.emit(REGISTER_EVENT, request)
+      if (!request.result) {
+        failures.push(`${name}: no installed Pi extension accepts session MCP servers`)
+        continue
       }
-    } catch (error) {
-      await Promise.all(registrations.splice(0).map(registration => registration.dispose()))
-      if (error instanceof Error && error.message.startsWith('pi-acp MCP bridge:')) throw error
-      fail(error instanceof Error ? error.message : String(error))
+      if (!request.result.ok) {
+        failures.push(`${name}: ${describeError(request.result.error)}`)
+        continue
+      }
+      registrations.push(request.result.registration)
+    }
+
+    if (failures.length > 0) {
+      fail(
+        `${failures.length} of ${names.length} session MCP server(s) did not attach (${failures.join('; ')}). The session continues without them.`
+      )
     }
   })
 
