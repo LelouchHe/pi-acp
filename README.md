@@ -11,9 +11,35 @@ This fork adds behavior needed by multi-session ACP clients such as WebAgent:
 - Supports opt-in forwarding of Pi extension slash commands with `pi-acp --extension-commands`.
 - Orders the advertised model list by Pi's `enabledModels` (the `/scoped-models` selection): models configured there move to the front in that order, unmatched models keep their original order. Unconfigured, the list stays unchanged. Configure via `~/.pi/agent/settings.json`, e.g. `"enabledModels": ["opencode-go/deepseek-v4-flash", "opencode-go/glm-5.3-flash"]` (entries support `*` globs and `:thinking` suffixes).
 - Maps Pi turn outcomes to standard ACP semantics without model-specific rules: `stop` and Pi's asynchronous `deferred` completion become `end_turn`, `length` becomes `max_tokens`, an explicit ACP cancellation becomes `cancelled`, and final Pi `error` or non-client `aborted` outcomes reject `session/prompt` with a standard JSON-RPC error. Intermediate `pending` and `toolUse` outcomes do not end the ACP turn.
-- With [`pi-mcp-adapter`](https://github.com/nicobailon/pi-mcp-adapter) installed and enabled in Pi, forwards standard ACP `session/new` and `session/load` MCP server definitions (`stdio`, HTTP, and SSE) as session-scoped runtime registrations. It does not write MCP configuration files or replace the user's existing Pi MCP configuration. It also preserves the optional per-server `_meta.directTools` hint and translates it only into the adapter's internal direct-tool setting; ACP MCP servers without that hint retain the adapter's normal proxy/lazy behavior.
+- With the [`pi-mcp-adapter` fork](https://github.com/LelouchHe/pi-mcp-adapter) installed and enabled in Pi, forwards standard ACP `session/new` and `session/load` MCP server definitions (`stdio`, HTTP, and SSE) as session-scoped runtime registrations. It does not write MCP configuration files or replace the user's existing Pi MCP configuration. It also preserves the optional per-server `_meta.directTools` hint and translates it only into the adapter's internal direct-tool setting; ACP MCP servers without that hint retain the adapter's normal proxy/lazy behavior. Upstream's adapter ignores that hint on runtime registrations, which is why the fork is required for the tools to reach Pi.
 - The ACP smoke runner reports JSON-RPC error responses, malformed session responses, startup failures, and premature child exits instead of waiting indefinitely for a successful session/prompt sequence.
 - Renders non-text prompt blocks (resource links, embedded context, audio markers) as their own lines, so text that follows one no longer runs into the marker (e.g. `[Context] file:///…` + the user's prompt); consecutive text blocks still concatenate unchanged.
+
+### Installing this fork
+
+The `pi-acp` package on npm is upstream's release and does not include the behavior listed above. Install the fork from a checkout:
+
+```bash
+git clone https://github.com/LelouchHe/pi-acp.git
+cd pi-acp
+npm install
+npm run build
+```
+
+Point your ACP client at the built entry point _inside that checkout_. `dist/` is not self-contained — tsup leaves `@agentclientprotocol/sdk` external — so `node_modules` has to stay next to it and a copy of `dist/` alone will not run. WebAgent users set:
+
+```toml
+agent_cmd = "/absolute/path/to/pi-acp/dist/index.js --approve --extension-commands"
+```
+
+To run the fork on another machine without publishing to npm, pack and install the tarball (`npm pack` runs the build first):
+
+```bash
+npm pack                          # writes pi-acp-<version>.tgz
+npm i -g ./pi-acp-<version>.tgz   # installs the built dist plus its dependencies
+```
+
+Do not install the fork straight from git with `npm i -g github:LelouchHe/pi-acp`: there is no `prepare` step to build it, so the package arrives without `dist/` and cannot run. The `Install` section below documents upstream's package.
 
 ---
 
