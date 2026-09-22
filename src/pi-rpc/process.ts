@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import * as readline from 'node:readline'
+import crossSpawn from 'cross-spawn'
 import { getPiCommand, shouldUseShellForPiCommand } from './command.js'
 
 export class PiRpcSpawnError extends Error {
@@ -160,12 +161,13 @@ export class PiRpcProcess {
     const args = ['--mode', 'rpc', '--no-themes']
     if (params.sessionPath) args.push('--session', params.sessionPath)
 
-    const child = spawn(cmd, args, {
+    // Windows cmd launchers need shell escaping; direct executables use native argv.
+    const start = shouldUseShellForPiCommand(cmd) ? crossSpawn : spawn
+    const child = start(cmd, args, {
       cwd: params.cwd,
       stdio: 'pipe',
-      env: process.env,
-      shell: shouldUseShellForPiCommand(cmd)
-    })
+      env: process.env
+    }) as ChildProcessWithoutNullStreams
 
     // Ensure spawn failures (e.g. ENOENT when pi isn't installed) are surfaced as a
     // deterministic error instead of later EPIPE/internal-error noise.
