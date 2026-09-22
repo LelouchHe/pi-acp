@@ -75,7 +75,13 @@ test('PiRpcProcess: request timeout rejects, clears pending, and swallows the la
   const events: unknown[] = []
   proc.onEvent(ev => events.push(ev))
 
-  await assert.rejects(proc.getSessionStats(5), /pi get_session_stats timed out after 5ms/)
+  // The request timer is unref'd; keep the test process alive until it fires.
+  const keepAlive = setTimeout(() => {}, 50)
+  try {
+    await assert.rejects(proc.getSessionStats(5), /pi get_session_stats timed out after 5ms/)
+  } finally {
+    clearTimeout(keepAlive)
+  }
   assert.equal(pendingSize(proc), 0)
 
   const sent = JSON.parse(written[0]) as { id: string; type: string }
