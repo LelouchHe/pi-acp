@@ -1,9 +1,6 @@
 name: Windows session path regression
 
 on:
-  push:
-    branches:
-      - fix/windows-session-path-132
   pull_request:
   workflow_dispatch:
 
