@@ -62,6 +62,7 @@ test('PiAcpAgent: newSession publishes context usage only after the response is 
   const conn = new FakeAgentSideConnection()
   const proc = new FakePiRpcProcess()
   proc.sessionStats = { contextUsage: { tokens: 1_234, contextWindow: 100_000 } }
+  proc.getState = async () => ({ thinkingLevel: 'medium' })
   const session = makeSession(proc, conn)
 
   const agent = new PiAcpAgent(asAgentConn(conn), {} as any)
@@ -86,6 +87,7 @@ test('PiAcpAgent: newSession tolerates a failing get_session_stats', async () =>
   const conn = new FakeAgentSideConnection()
   const proc = new FakePiRpcProcess()
   proc.sessionStatsError = new Error('pi get_session_stats failed: unsupported')
+  proc.getState = async () => ({ thinkingLevel: 'medium' })
   const session = makeSession(proc, conn)
 
   const agent = new PiAcpAgent(asAgentConn(conn), {} as any)
@@ -130,7 +132,7 @@ test('PiAcpAgent: switching the model config option refreshes context usage', as
 
   assert.deepEqual(
     conn.updates.map(u => u.update.sessionUpdate),
-    ['config_option_update', 'usage_update']
+    ['current_mode_update', 'config_option_update', 'usage_update']
   )
   assert.deepEqual(conn.updates.at(-1), {
     sessionId: 's1',
@@ -167,7 +169,7 @@ test('PiAcpAgent: unstable_setSessionModel refreshes context usage', async () =>
   assert.equal(proc.getSessionStatsCount, 1)
   assert.deepEqual(
     conn.updates.map(u => u.update.sessionUpdate),
-    ['config_option_update', 'usage_update']
+    ['current_mode_update', 'config_option_update', 'usage_update']
   )
   assert.deepEqual(conn.updates.at(-1), {
     sessionId: 's1',
