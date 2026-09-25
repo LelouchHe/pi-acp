@@ -53,7 +53,7 @@ class MultiSessionFakeSessions {
       sessionId,
       cwd: params.cwd,
       proc: params.proc,
-      async sendUsageUpdate() {}
+      async publishContextUsage() {}
     }
     this.sessions.set(sessionId, session)
     return session
@@ -68,6 +68,9 @@ test('PiAcpAgent: newSession keeps existing sessions live', async () => {
     sessionId: 'new-session',
     cwd: process.cwd(),
     proc: {
+      async getAvailableThinkingLevels() {
+        return ['medium']
+      },
       async getAvailableModels() {
         return { models: [{ provider: 'test', id: 'model', name: 'Model' }] }
       },
@@ -81,7 +84,7 @@ test('PiAcpAgent: newSession keeps existing sessions live', async () => {
     },
     setStartupInfo() {},
     sendStartupInfoIfPending() {},
-    async sendUsageUpdate() {}
+    async publishContextUsage() {}
   }
   const sessions = new MultiSessionFakeSessions(session)
 
@@ -111,6 +114,7 @@ test('PiAcpAgent: loadSession only replaces the requested live session', async (
     return {
       onEvent: () => () => {},
       getMessages: async () => ({ messages: [] }),
+      getAvailableThinkingLevels: async () => ['medium'],
       getState: async () => ({
         thinkingLevel: 'medium',
         model: { provider: 'test', id: 'model' }
@@ -275,7 +279,9 @@ test('PiAcpAgent: setSessionConfigOption auto-restores via pi session discovery 
     sessionId,
     cwd: params.cwd,
     proc: params.proc,
-    async sendUsageUpdate() {}
+    async publishContextUsage() {
+      // Context usage publishing is covered in test/unit/context-usage.test.ts.
+    }
   }))
 
   const originalSpawn = PiRpcProcess.spawn
@@ -283,6 +289,7 @@ test('PiAcpAgent: setSessionConfigOption auto-restores via pi session discovery 
     spawnCalls.push(params)
     return {
       onEvent: () => () => {},
+      getAvailableThinkingLevels: async () => ['medium'],
       getAvailableModels: async () => ({
         models: [
           { provider: 'test', id: 'alpha', name: 'Alpha' },
@@ -337,6 +344,7 @@ test('PiAcpAgent: setSessionConfigOption auto-restores via pi session discovery 
       }
     ])
     assert.deepEqual(conn.updates, [
+      { sessionId: 'fallback-session', update: { sessionUpdate: 'current_mode_update', currentModeId: 'medium' } },
       {
         sessionId: 'fallback-session',
         update: {

@@ -56,7 +56,10 @@ test('PiAcpAgent advertises and forwards standard ACP MCP servers to a Pi subpro
     return {
       onEvent: () => () => {},
       async getState() {
-        return { sessionId: 'mcp-session' }
+        return { sessionId: 'mcp-session', thinkingLevel: 'medium' }
+      },
+      async getAvailableThinkingLevels() {
+        return ['medium']
       },
       async getAvailableModels() {
         return { models: [{ provider: 'test', id: 'model', name: 'model' }] }
@@ -113,7 +116,10 @@ test('AgentSideConnection preserves _meta directTools through real session/new p
     return {
       onEvent: () => () => {},
       async getState() {
-        return { sessionId: 'meta-session' }
+        return { sessionId: 'meta-session', thinkingLevel: 'medium' }
+      },
+      async getAvailableThinkingLevels() {
+        return ['medium']
       },
       async getAvailableModels() {
         return { models: [{ provider: 'test', id: 'model', name: 'model' }] }
@@ -133,12 +139,13 @@ test('AgentSideConnection preserves _meta directTools through real session/new p
   )
   void agentConnection
   const clientConnection = new ClientSideConnection(
-    () => ({
-      async requestPermission() {
-        return { outcome: { outcome: 'cancelled' } }
-      },
-      async sessionUpdate() {}
-    }) as any,
+    () =>
+      ({
+        async requestPermission() {
+          return { outcome: { outcome: 'cancelled' } }
+        },
+        async sessionUpdate() {}
+      }) as any,
     ndJsonStream(clientToAgent.writable, agentToClient.readable)
   )
 

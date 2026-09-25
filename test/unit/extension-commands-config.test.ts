@@ -31,6 +31,9 @@ async function advertisedCommandNames(includeExtensionCommands: boolean): Promis
     const session = {
       sessionId: 's1',
       proc: {
+        async getAvailableThinkingLevels() {
+          return ['medium']
+        },
         async getAvailableModels() {
           return { models: [{ provider: 'test', id: 'model', name: 'model' }] }
         },
@@ -41,7 +44,7 @@ async function advertisedCommandNames(includeExtensionCommands: boolean): Promis
           return { commands: [{ name: 'analytics', description: 'Usage analytics', source: 'extension' }] }
         }
       },
-      sendUsageUpdate() {},
+      publishContextUsage() {},
       setStartupInfo() {},
       sendStartupInfoIfPending() {}
     }

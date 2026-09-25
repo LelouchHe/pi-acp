@@ -9,7 +9,6 @@ This fork adds behavior needed by multi-session ACP clients such as WebAgent:
 - Uses Pi's Bash tool name as the ACP title and exposes the full command through `rawInput.command`, allowing clients to render it as collapsible detail instead of an oversized title.
 - Supports `pi-acp --approve` to pass Pi's per-process `--approve` project-trust override into every RPC session.
 - Supports opt-in forwarding of Pi extension slash commands with `pi-acp --extension-commands`.
-- Orders the advertised model list by Pi's `enabledModels` (the `/scoped-models` selection): models configured there move to the front in that order, unmatched models keep their original order. Unconfigured, the list stays unchanged. Configure via `~/.pi/agent/settings.json`, e.g. `"enabledModels": ["opencode-go/deepseek-v4-flash", "opencode-go/glm-5.3-flash"]` (entries support `*` globs and `:thinking` suffixes).
 - Maps Pi turn outcomes to standard ACP semantics without model-specific rules: `stop` and Pi's asynchronous `deferred` completion become `end_turn`, `length` becomes `max_tokens`, an explicit ACP cancellation becomes `cancelled`, and final Pi `error` or non-client `aborted` outcomes reject `session/prompt` with a standard JSON-RPC error. Intermediate `pending` and `toolUse` outcomes do not end the ACP turn.
 - With a Pi extension that accepts session-scoped MCP servers loaded — for example [`pi-mcp-adapter`](https://github.com/LelouchHe/pi-mcp-adapter) — forwards the standard ACP `session/new` and `session/load` MCP server definitions (`stdio`, HTTP, and SSE) as runtime registrations. It does not write MCP configuration files or replace the user's existing Pi MCP configuration. The note further down about MCP servers not being wired through to pi describes upstream only.
 - That extension is required for ACP-provided MCP servers to work at all: pi-acp publishes them on a fixed registration channel, so only an extension implementing that channel is reached, and `pi-mcp-adapter` is the one that does. MCP is otherwise separate from the rest of the session, so not having it costs the MCP capability and nothing else — chat, tools, files, and permissions keep working.
@@ -72,6 +71,10 @@ Expect some minor breaking changes.
   - Loads file-based slash commands compatible with pi’s conventions
   - Adds a small set of built-in commands for headless/editor usage
   - Supports skill commands (if enabled in pi settings, they appear as `/skill:skill-name` in the ACP client)
+- Context window usage
+  - Reports pi's real context occupancy (`get_session_stats` → `contextUsage`) to the client as ACP `usage_update` after each turn, on `session/new` and `session/load`, and after a model switch
+  - Requires a pi version whose `get_session_stats` response includes `contextUsage`; otherwise no usage is reported
+  - Right after compaction pi may not have a trustworthy token count yet, so the client keeps the previous value until the next model response
 - Skills are loaded by pi directly and are available in ACP sessions
 - (Zed) `pi-acp` emits “startup info” block into the session (pi version, context, skills, prompts, extensions - similar to `pi` in the terminal). You can disable it by setting `quietStartup: true` in pi settings (`~/.pi/agent/settings.json` or `<project>/.pi/settings.json`). When `quietStartup` is enabled, `pi-acp` will still emit a 'New version available' message if the installed pi version is outdated.
 - (Zed) Session history is supported in Zed starting with [`v0.225.0`](https://zed.dev/releases/preview/0.225.0). Session loading / history maps to pi's session files. Sessions can be resumed both in `pi` and in the ACP client.
@@ -85,7 +88,7 @@ npm install -g @earendil-works/pi-coding-agent
 ```
 
 - Node.js 22+
-- `pi` v0.80.4+ installed and available on your `PATH` (the adapter runs the `pi` executable)
+- `pi` v0.81.0+ installed and available on your `PATH` (the adapter runs the `pi` executable)
 - Configure `pi` separately for your model providers/API keys
 
 ## Install

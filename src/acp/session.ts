@@ -11,7 +11,13 @@ import type {
 import { RequestError } from '@agentclientprotocol/sdk'
 import { readFileSync } from 'node:fs'
 import { isAbsolute, resolve as resolvePath } from 'node:path'
-import { PiRpcProcess, PiRpcSpawnError, type PiRpcEvent } from '../pi-rpc/process.js'
+import {
+  PiRpcProcess,
+  PiRpcSpawnError,
+  SESSION_STATS_TIMEOUT_MS,
+  type PiRpcEvent,
+  type PiSessionStats
+} from '../pi-rpc/process.js'
 import type { PiMcpServerDefinitions } from './mcp.js'
 import { maybeAuthRequiredError } from './auth-required.js'
 import { SessionStore } from './session-store.js'
@@ -58,23 +64,23 @@ const CONFIRM_PERMISSION_OPTIONS: PermissionOption[] = [
 const EXTENSION_UI_RAW_INPUT_KEYS = ['title', 'message', 'options', 'placeholder', 'prefill'] as const
 const CHOICE_OPTION_PREFIX = 'choice-'
 
+/**
+ * Map pi's context stats to an ACP `usage_update`. Usage is omitted when pi does
+ * not report a trustworthy token count, such as immediately after compaction.
+ */
 export function toAcpUsageUpdate(stats: unknown): SessionUpdate | null {
-  const value = stats as {
-    contextUsage?: { tokens?: unknown; contextWindow?: unknown } | null
-    cost?: unknown
-  } | null
+  const value = stats as PiSessionStats | null | undefined
   const used = value?.contextUsage?.tokens
   const size = value?.contextUsage?.contextWindow
 
-  if (!Number.isSafeInteger(used) || (used as number) < 0 || !Number.isSafeInteger(size) || (size as number) <= 0) {
-    return null
-  }
+  if (typeof used !== 'number' || !Number.isSafeInteger(used) || used < 0) return null
+  if (typeof size !== 'number' || !Number.isSafeInteger(size) || size <= 0) return null
 
   const cost = value?.cost
   return {
     sessionUpdate: 'usage_update',
-    used: used as number,
-    size: size as number,
+    used,
+    size,
     ...(typeof cost === 'number' && Number.isFinite(cost) ? { cost: { amount: cost, currency: 'USD' } } : {})
   }
 }
@@ -434,14 +440,43 @@ export class PiAcpSession {
     await this.lastEmit
   }
 
-  async sendUsageUpdate(stats?: unknown): Promise<void> {
+  /**
+   * Best-effort: publish context occupancy through the bounded Pi stats query.
+   * Queued updates are flushed even when the query fails or times out, so callers
+   * can await delivery before resolving `session/prompt`.
+   */
+  async publishContextUsage(): Promise<void> {
     try {
-      const update = toAcpUsageUpdate(stats ?? (await this.proc.getSessionStats()))
-      if (!update) return
-      this.emit(update)
-      await this.flushEmits()
+      // Older/stubbed pi processes may not expose the stats RPC at all.
+      const stats =
+        typeof this.proc.getSessionStats === 'function'
+          ? await this.proc.getSessionStats(SESSION_STATS_TIMEOUT_MS)
+          : undefined
+      const update = toAcpUsageUpdate(stats)
+      if (update) this.emit(update)
     } catch {
-      // Usage reporting is optional; never fail a session when pi cannot provide it.
+      // Context usage is auxiliary; never fail or delay the turn because of it.
+    }
+
+    await this.flushEmits()
+  }
+
+  private async settleTurn(): Promise<void> {
+    const turn = this.pendingTurn
+    if (!turn || turn.completion !== 'agent_settled') return
+
+    // Snapshot the terminal result: agent_settled guarantees no later Pi event can
+    // revise it, while the bounded stats query and queued updates are being flushed.
+    const cancelled = this.cancelRequested
+    const terminalOutcome = this.pendingTerminalOutcome
+    await this.publishContextUsage()
+
+    if (cancelled) {
+      this.completeTurn(turn, 'cancelled')
+    } else if (terminalOutcome && 'error' in terminalOutcome) {
+      this.failTurn(turn, terminalOutcome.error)
+    } else {
+      this.completeTurn(turn, terminalOutcome?.stopReason ?? 'end_turn')
     }
   }
 
@@ -528,7 +563,7 @@ export class PiAcpSession {
       .then(() => {
         if (t.completion !== 'rpc_response' || this.pendingTurn !== t) return
         void this.flushEmits()
-          .then(() => this.sendUsageUpdate())
+          .then(() => this.publishContextUsage())
           .finally(() => this.completeTurn(t, this.cancelRequested ? 'cancelled' : 'end_turn'))
       })
       .catch(err => {
@@ -970,25 +1005,7 @@ export class PiAcpSession {
       }
 
       case 'agent_settled': {
-        const turn = this.pendingTurn
-        if (!turn || turn.completion !== 'agent_settled') break
-
-        // Snapshot the terminal outcome before the asynchronous usage refresh.
-        // agent_settled means no later retry or message can change this turn.
-        const cancelled = this.cancelRequested
-        const terminalOutcome = this.pendingTerminalOutcome
-
-        // Refresh usage after retries, compaction, and queued continuations settle,
-        // then deliver every update before resolving the ACP prompt request.
-        void this.sendUsageUpdate().finally(() => {
-          if (cancelled) {
-            this.completeTurn(turn, 'cancelled')
-          } else if (terminalOutcome && 'error' in terminalOutcome) {
-            this.failTurn(turn, terminalOutcome.error)
-          } else {
-            this.completeTurn(turn, terminalOutcome?.stopReason ?? 'end_turn')
-          }
-        })
+        void this.settleTurn()
         break
       }
 
