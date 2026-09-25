@@ -58,6 +58,39 @@ test('PiAcpSession: emits usage_update before an agent turn settles', async () =
   })
 })
 
+test('PiAcpSession: publishes already-read session stats without issuing a second RPC', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+  const stats = {
+    contextUsage: { tokens: 12_345, contextWindow: 200_000 },
+    cost: 0.45
+  }
+  const session = new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  await session.publishContextUsage(stats)
+
+  assert.equal(proc.getSessionStatsCount, 0)
+  assert.deepEqual(
+    conn.updates.find(msg => msg.update.sessionUpdate === 'usage_update'),
+    {
+      sessionId: 's1',
+      update: {
+        sessionUpdate: 'usage_update',
+        used: 12_345,
+        size: 200_000,
+        cost: { amount: 0.45, currency: 'USD' }
+      }
+    }
+  )
+})
+
 test('PiAcpSession: emits agent_message_chunk for text_delta', async () => {
   const conn = new FakeAgentSideConnection()
   const proc = new FakePiRpcProcess()

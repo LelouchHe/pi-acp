@@ -538,7 +538,7 @@ export class PiAcpAgent implements ACPAgent {
             content: { type: 'text', text }
           }
         })
-        await session.publishContextUsage()
+        await session.publishContextUsage(stats)
 
         return { stopReason: 'end_turn' }
       }

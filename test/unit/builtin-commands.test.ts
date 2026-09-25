@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { PiAcpAgent } from '../../src/acp/agent.js'
+import { PiAcpSession } from '../../src/acp/session.js'
 import { FakeAgentSideConnection, FakePiRpcProcess, asAgentConn } from '../helpers/fakes.js'
 
 class FakeSessions {
@@ -12,6 +13,46 @@ class FakeSessions {
     return this.session
   }
 }
+
+test('PiAcpAgent: /session reuses displayed stats for its ACP usage update', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+  proc.sessionStats = {
+    sessionId: 's1',
+    contextUsage: { tokens: 12_345, contextWindow: 200_000 },
+    cost: 0.45
+  }
+  const session = new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+  const agent = new PiAcpAgent(asAgentConn(conn))
+  ;(agent as any).sessions = new FakeSessions(session) as any
+
+  const response = await agent.prompt({
+    sessionId: 's1',
+    prompt: [{ type: 'text', text: '/session' }]
+  } as any)
+
+  assert.equal(response.stopReason, 'end_turn')
+  assert.equal(proc.getSessionStatsCount, 1)
+  assert.deepEqual(
+    conn.updates.find(msg => msg.update.sessionUpdate === 'usage_update'),
+    {
+      sessionId: 's1',
+      update: {
+        sessionUpdate: 'usage_update',
+        used: 12_345,
+        size: 200_000,
+        cost: { amount: 0.45, currency: 'USD' }
+      }
+    }
+  )
+})
 
 test('PiAcpAgent: /steering is handled adapter-side', async () => {
   const conn = new FakeAgentSideConnection()

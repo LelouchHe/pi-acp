@@ -441,18 +441,22 @@ export class PiAcpSession {
   }
 
   /**
-   * Best-effort: publish context occupancy through the bounded Pi stats query.
-   * Queued updates are flushed even when the query fails or times out, so callers
-   * can await delivery before resolving `session/prompt`.
+   * Best-effort: publish context occupancy from supplied stats or a bounded Pi
+   * stats query. Queued updates are flushed even when the query fails or times out,
+   * so callers can await delivery before resolving `session/prompt`.
    */
-  async publishContextUsage(): Promise<void> {
+  async publishContextUsage(stats?: PiSessionStats | null): Promise<void> {
     try {
-      // Older/stubbed pi processes may not expose the stats RPC at all.
-      const stats =
-        typeof this.proc.getSessionStats === 'function'
-          ? await this.proc.getSessionStats(SESSION_STATS_TIMEOUT_MS)
-          : undefined
-      const update = toAcpUsageUpdate(stats)
+      // Older/stubbed pi processes may not expose the stats RPC at all. Callers
+      // that already fetched stats for their own output can pass them through
+      // instead of rescanning the session history a second time.
+      const snapshot =
+        stats !== undefined
+          ? stats
+          : typeof this.proc.getSessionStats === 'function'
+            ? await this.proc.getSessionStats(SESSION_STATS_TIMEOUT_MS)
+            : undefined
+      const update = toAcpUsageUpdate(snapshot)
       if (update) this.emit(update)
     } catch {
       // Context usage is auxiliary; never fail or delay the turn because of it.
