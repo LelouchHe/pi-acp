@@ -58,14 +58,13 @@ export function getEnableSkillCommands(cwd: string): boolean {
 }
 
 /**
- * pi's `/scoped-models` selection: `enabledModels` ("provider/model" id list),
- * persisted to global settings by pi and overridable per project.
- * Returns `undefined` when absent or malformed so callers can fall back to
- * the full model list unchanged.
+ * Read the global `/scoped-models` selection: `enabledModels` ("provider/model" id list).
+ * Project settings are intentionally ignored so every session shares the same model order.
+ * Returns `undefined` when absent or malformed so callers can keep the full model list unchanged.
  */
-export function getEnabledModels(cwd: string): string[] | undefined {
-  const merged = getMergedSettings(cwd)
-  const value = merged.enabledModels
+export function getEnabledModels(): string[] | undefined {
+  const globalSettings = readJsonFile(join(getAgentDir(), 'settings.json'))
+  const value = globalSettings.enabledModels
   if (!Array.isArray(value)) return undefined
   const models = value.filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
   return models.length > 0 ? models : undefined

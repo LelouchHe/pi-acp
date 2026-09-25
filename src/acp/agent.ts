@@ -44,7 +44,7 @@ import {
 } from './translate/bash.js'
 import { promptToPiMessage } from './translate/prompt.js'
 import { loadSlashCommands, parseCommandArgs, toAvailableCommands } from './slash-commands.js'
-import { getAgentDir, getEnableSkillCommands, getQuietStartup } from './pi-settings.js'
+import { getAgentDir, getEnableSkillCommands, getEnabledModels, getQuietStartup } from './pi-settings.js'
 import { hasExtensionCommand, toAvailableCommandsFromPiGetCommands } from './pi-commands.js'
 import { maybeAuthRequiredError } from './auth-required.js'
 import { isAbsolute } from 'node:path'
@@ -1382,6 +1382,24 @@ async function getModelState(
       } satisfies AdvertisedModel
     })
     .filter(Boolean) as AdvertisedModel[]
+
+  const enabledModels = getEnabledModels()
+  if (enabledModels) {
+    const enabledOrder = new Map<string, number>()
+    enabledModels.forEach((modelId, index) => {
+      if (!enabledOrder.has(modelId)) enabledOrder.set(modelId, index)
+    })
+
+    availableModels = availableModels
+      .map((model, index) => ({ model, index, priority: enabledOrder.get(model.modelId) }))
+      .sort((a, b) => {
+        if (a.priority !== undefined && b.priority !== undefined) return a.priority - b.priority || a.index - b.index
+        if (a.priority !== undefined) return -1
+        if (b.priority !== undefined) return 1
+        return a.index - b.index
+      })
+      .map(({ model }) => model)
+  }
 
   // Ask pi what model is currently active.
   let currentModelId: string | null = null
