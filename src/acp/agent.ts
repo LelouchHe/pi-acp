@@ -1384,22 +1384,7 @@ async function getModelState(
     .filter(Boolean) as AdvertisedModel[]
 
   const enabledModels = getEnabledModels()
-  if (enabledModels) {
-    const enabledOrder = new Map<string, number>()
-    enabledModels.forEach((modelId, index) => {
-      if (!enabledOrder.has(modelId)) enabledOrder.set(modelId, index)
-    })
-
-    availableModels = availableModels
-      .map((model, index) => ({ model, index, priority: enabledOrder.get(model.modelId) }))
-      .sort((a, b) => {
-        if (a.priority !== undefined && b.priority !== undefined) return a.priority - b.priority || a.index - b.index
-        if (a.priority !== undefined) return -1
-        if (b.priority !== undefined) return 1
-        return a.index - b.index
-      })
-      .map(({ model }) => model)
-  }
+  if (enabledModels) availableModels = orderModelsByEnabled(availableModels, enabledModels)
 
   // Ask pi what model is currently active.
   let currentModelId: string | null = null
@@ -1430,6 +1415,65 @@ async function getModelState(
     availableModels,
     currentModelId: currentModelId ?? availableModels[0]?.modelId ?? 'default'
   }
+}
+
+/** Strip a trailing recognized thinking-level suffix from an enabled-models entry. */
+function stripThinkingSuffix(entry: string): string {
+  const colon = entry.lastIndexOf(':')
+  const suffix = colon === -1 ? '' : entry.slice(colon + 1)
+  if (
+    suffix === 'off' ||
+    suffix === 'minimal' ||
+    suffix === 'low' ||
+    suffix === 'medium' ||
+    suffix === 'high' ||
+    suffix === 'xhigh'
+  ) {
+    return entry.slice(0, colon)
+  }
+  return entry
+}
+
+function enabledEntryMatches(entry: string, modelId: string): boolean {
+  const id = stripThinkingSuffix(entry)
+  if (!id.includes('*')) return id === modelId
+
+  const segments = id.split('/')
+  const modelSegments = modelId.split('/')
+  if (segments.length !== modelSegments.length) return false
+
+  return segments.every((segment, index) => {
+    if (segment === '*') return true
+    if (!segment.includes('*')) return segment === modelSegments[index]
+
+    const parts = segment.split('*')
+    let rest = modelSegments[index]
+    for (const part of parts) {
+      if (part === '') continue
+      const position = rest.indexOf(part)
+      if (position === -1) return false
+      rest = rest.slice(position + part.length)
+    }
+    return true
+  })
+}
+
+function orderModelsByEnabled(models: AdvertisedModel[], enabled: string[]): AdvertisedModel[] {
+  const ordered: AdvertisedModel[] = []
+  const seen = new Set<string>()
+
+  for (const entry of enabled) {
+    for (const model of models) {
+      if (seen.has(model.modelId) || !enabledEntryMatches(entry, model.modelId)) continue
+      ordered.push(model)
+      seen.add(model.modelId)
+    }
+  }
+
+  for (const model of models) {
+    if (!seen.has(model.modelId)) ordered.push(model)
+  }
+  return ordered
 }
 
 async function emitConfigOptionsUpdate(

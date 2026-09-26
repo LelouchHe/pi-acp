@@ -151,6 +151,42 @@ test('global enabledModels order is shared across projects and keeps every unmat
   assert.deepEqual(secondProject, EXPECTED_ORDER)
 })
 
+test('global enabledModels glob entries prioritize matching models without filtering', async () => {
+  await withSettings({ enabledModels: ['other/*'] }, { enabledModels: ['test/*'] }, async cwd => {
+    const conn = new FakeAgentSideConnection()
+    const session = makeSession(cwd)
+    const agent = new PiAcpAgent(asAgentConn(conn), {} as any)
+    ;(agent as any).sessions = new FakeSessions(session) as any
+
+    const result = await agent.newSession({ cwd, mcpServers: [] } as any)
+    assert.deepEqual(advertisedModelIds(result), [
+      'other/delta',
+      'other/epsilon',
+      'test/alpha',
+      'test/beta',
+      'test/gamma'
+    ])
+  })
+})
+
+test('global enabledModels thinking suffix matches the underlying model ID', async () => {
+  await withSettings({ enabledModels: ['other/delta:high'] }, { enabledModels: ['test/*'] }, async cwd => {
+    const conn = new FakeAgentSideConnection()
+    const session = makeSession(cwd)
+    const agent = new PiAcpAgent(asAgentConn(conn), {} as any)
+    ;(agent as any).sessions = new FakeSessions(session) as any
+
+    const result = await agent.newSession({ cwd, mcpServers: [] } as any)
+    assert.deepEqual(advertisedModelIds(result), [
+      'other/delta',
+      'test/alpha',
+      'test/beta',
+      'test/gamma',
+      'other/epsilon'
+    ])
+  })
+})
+
 test('loadSession applies global enabledModels order to models and config options', async () => {
   await withSettings({ enabledModels: ENABLED_ORDER }, { enabledModels: ['other/delta', 'test/beta'] }, async cwd => {
     const conn = new FakeAgentSideConnection()
