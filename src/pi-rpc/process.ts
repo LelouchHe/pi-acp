@@ -108,7 +108,7 @@ type SpawnParams = {
   sessionPath?: string
   /** Trust project-local Pi settings and resources for this subprocess. */
   approveProject?: boolean
-  /** Standard ACP MCP servers translated for pi-mcp-adapter runtime registration. */
+  /** Standard ACP MCP servers translated for Pi's built-in MCP support. */
   mcpServers?: PiMcpServerDefinitions
 }
 

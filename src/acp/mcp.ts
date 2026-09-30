@@ -1,14 +1,16 @@
 import type { McpServer } from '@agentclientprotocol/sdk'
 
+export type PiMcpExposure = 'direct' | 'codemode' | 'codemode-deferred' | 'deferred' | 'hidden'
+
+/** One `mcpServers` entry in the shape Pi's built-in MCP support accepts. */
 export type PiMcpServerDefinition = {
   command?: string
   args?: string[]
   env?: Record<string, string>
   url?: string
   headers?: Record<string, string>
-  httpTransport?: 'sse'
-  /** Promote this server's tools into the agent's native tool surface. */
-  directTools?: boolean | string[]
+  exposure?: PiMcpExposure
+  toolExposure?: Record<string, PiMcpExposure>
 }
 
 export type PiMcpServerDefinitions = Record<string, PiMcpServerDefinition>
@@ -17,15 +19,35 @@ function invalid(message: string): never {
   throw new Error(`Invalid ACP MCP server: ${message}`)
 }
 
+const SERVER_NAME = /^[A-Za-z0-9_-]+$/
+
 function requireName(value: unknown): string {
   if (typeof value !== 'string' || value.trim() === '') invalid('name must be a non-empty string')
   if (value === '__proto__' || value === 'constructor' || value === 'prototype')
     invalid(`unsupported server name ${JSON.stringify(value)}`)
+  if (!SERVER_NAME.test(value))
+    invalid(`server name ${JSON.stringify(value)} may only contain letters, digits, "_" and "-"`)
   return value
 }
 
+/**
+ * Pi resolves `env` and `headers` values as config references: `$NAME` and
+ * `${NAME}` read environment variables and a leading `!` runs a shell command.
+ * ACP supplies literal values, so escape them (`$$` is a literal `$`, `$!` a
+ * literal `!`) to keep a client-provided value from expanding or executing.
+ */
+export function escapePiConfigValue(value: string): string {
+  const escaped = value.replaceAll('$', '$$$$')
+  return escaped.startsWith('!') ? `$${escaped}` : escaped
+}
+
 function defineString(target: Record<string, string>, key: string, value: string): void {
-  Object.defineProperty(target, key, { value, enumerable: true, configurable: true, writable: true })
+  Object.defineProperty(target, key, {
+    value: escapePiConfigValue(value),
+    enumerable: true,
+    configurable: true,
+    writable: true
+  })
 }
 
 function toEnvironment(entries: unknown): Record<string, string> {
@@ -61,22 +83,43 @@ function toHeaders(entries: unknown): Record<string, string> {
   return headers
 }
 
+type Exposure = Pick<PiMcpServerDefinition, 'exposure' | 'toolExposure'>
+
 /**
- * Translate the standard ACP session setup surface to pi-mcp-adapter's
- * runtime-registration shape. This is intentionally process-local and does
- * not read or write any MCP configuration files.
+ * Map the optional `_meta.directTools` hint to Pi's exposure settings: `true`
+ * declares every tool to the model, and a tool-name list declares only those
+ * tools while the rest keep Pi's default exposure.
  */
-function directToolsFromMeta(value: Record<string, unknown>): boolean | string[] | undefined {
+function exposureFromMeta(value: Record<string, unknown>): Exposure {
   const meta = value._meta
-  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return undefined
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return {}
 
   const directTools = (meta as Record<string, unknown>).directTools
-  if (directTools === undefined) return undefined
-  if (typeof directTools === 'boolean') return directTools
-  if (Array.isArray(directTools) && directTools.every(tool => typeof tool === 'string'))
-    return [...directTools] as string[]
-  invalid('MCP _meta.directTools must be a boolean or array of tool names')
+  if (directTools === undefined || directTools === false) return {}
+  if (directTools === true) return { exposure: 'direct' }
+  if (!Array.isArray(directTools) || !directTools.every(tool => typeof tool === 'string' && tool !== ''))
+    invalid('MCP _meta.directTools must be a boolean or array of tool names')
+  // Pi reads `*` in toolExposure keys as a wildcard, so a literal tool name must not contain one.
+  const wildcard = directTools.find(tool => tool.includes('*'))
+  if (wildcard !== undefined) invalid(`MCP _meta.directTools entry ${JSON.stringify(wildcard)} must not contain "*"`)
+  if (directTools.length === 0) return {}
+  const toolExposure: Record<string, PiMcpExposure> = {}
+  for (const tool of directTools) {
+    Object.defineProperty(toolExposure, tool, {
+      value: 'direct',
+      enumerable: true,
+      configurable: true,
+      writable: true
+    })
+  }
+  return { toolExposure }
 }
+
+/**
+ * Translate the standard ACP session setup surface to the `mcpServers` shape of
+ * Pi's built-in MCP support. This is intentionally process-local and does not
+ * read or write any MCP configuration files.
+ */
 
 export function translateAcpMcpServers(mcpServers: readonly McpServer[]): PiMcpServerDefinitions {
   const definitions: PiMcpServerDefinitions = {}
@@ -85,7 +128,7 @@ export function translateAcpMcpServers(mcpServers: readonly McpServer[]): PiMcpS
     const value = server as unknown as Record<string, unknown>
     const name = requireName(value.name)
     if (Object.hasOwn(definitions, name)) invalid(`duplicate MCP server name ${JSON.stringify(name)}`)
-    const directTools = directToolsFromMeta(value)
+    const exposure = exposureFromMeta(value)
 
     if (value.type === undefined) {
       if (typeof value.command !== 'string' || value.command === '')
@@ -96,21 +139,21 @@ export function translateAcpMcpServers(mcpServers: readonly McpServer[]): PiMcpS
         command: value.command,
         args: [...value.args] as string[],
         env: toEnvironment(value.env),
-        ...(directTools !== undefined ? { directTools } : {})
+        ...exposure
       }
       continue
     }
 
     if (value.type === 'acp') invalid('ACP MCP transport is not supported by pi')
-    if (value.type !== 'http' && value.type !== 'sse') invalid(`unsupported transport ${JSON.stringify(value.type)}`)
+    if (value.type === 'sse') invalid('legacy SSE MCP transport is not supported by pi; use streamable HTTP')
+    if (value.type !== 'http') invalid(`unsupported transport ${JSON.stringify(value.type)}`)
     if (typeof value.url !== 'string' || value.url === '')
-      invalid(`${value.type} server ${JSON.stringify(name)} url must be a non-empty string`)
+      invalid(`http server ${JSON.stringify(name)} url must be a non-empty string`)
 
     definitions[name] = {
       url: value.url,
       headers: toHeaders(value.headers),
-      ...(value.type === 'sse' ? { httpTransport: 'sse' as const } : {}),
-      ...(directTools !== undefined ? { directTools } : {})
+      ...exposure
     }
   }
 

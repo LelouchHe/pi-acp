@@ -146,10 +146,11 @@ test('PiAcpAgent: loadSession only replaces the requested live session', async (
       cwd: process.cwd(),
       mcpServers: [
         {
-          type: 'sse',
+          type: 'http',
           name: 'restored-tools',
-          url: 'https://example.test/sse',
-          headers: []
+          url: 'https://example.test/mcp',
+          headers: [],
+          _meta: { directTools: true }
         }
       ]
     } as any)
@@ -162,9 +163,9 @@ test('PiAcpAgent: loadSession only replaces the requested live session', async (
         piCommand: process.env.PI_ACP_PI_COMMAND,
         mcpServers: {
           'restored-tools': {
-            url: 'https://example.test/sse',
+            url: 'https://example.test/mcp',
             headers: {},
-            httpTransport: 'sse'
+            exposure: 'direct'
           }
         }
       }

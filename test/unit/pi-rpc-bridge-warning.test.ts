@@ -11,7 +11,7 @@ send({
   type: 'extension_error',
   extensionPath: '/tmp/acp-mcp-bridge.js',
   event: 'session_start',
-  error: 'pi-acp MCP bridge: 1 of 1 session MCP server(s) did not attach (remote: no installed Pi extension accepts session MCP servers). The session continues without them.'
+  error: 'pi-acp MCP bridge: 1 of 1 session MCP server(s) did not attach (remote: this Pi version has no built-in MCP support (pi.registerMcpServer); upgrade Pi). The session continues without them.'
 })
 send({
   type: 'extension_error',
@@ -62,7 +62,7 @@ test('PiRpcProcess: a bridge warning is logged and never fails the session', asy
       // Session-scoped MCP wiring is best effort: the bridge's report is a
       // warning, not a reason to fail session creation.
       assert.deepEqual(logged, [
-        'pi-acp MCP bridge: 1 of 1 session MCP server(s) did not attach (remote: no installed Pi extension accepts session MCP servers). The session continues without them.'
+        'pi-acp MCP bridge: 1 of 1 session MCP server(s) did not attach (remote: this Pi version has no built-in MCP support (pi.registerMcpServer); upgrade Pi). The session continues without them.'
       ])
     } finally {
       proc.dispose()
