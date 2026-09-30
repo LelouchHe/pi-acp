@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+
 const ENV_NAME = 'PI_ACP_MCP_SERVERS'
 
 type PiExtensionApi = {
@@ -29,10 +33,43 @@ function readDefinitions(): Record<string, Record<string, unknown>> {
   return parsed as Record<string, Record<string, unknown>>
 }
 
+function agentDir(): string {
+  const configured = process.env.PI_CODING_AGENT_DIR
+  if (!configured) return join(homedir(), '.pi', 'agent')
+  if (configured === '~') return homedir()
+  if (configured.startsWith('~/')) return join(homedir(), configured.slice(2))
+  return configured
+}
+
+function configuredServerNames(path: string): Set<string> {
+  try {
+    const servers = (JSON.parse(readFileSync(path, 'utf8')) as { mcpServers?: unknown }).mcpServers
+    return servers && typeof servers === 'object' ? new Set(Object.keys(servers)) : new Set()
+  } catch {
+    return new Set()
+  }
+}
+
+/**
+ * Pi's `mcp.json` entries take precedence over extension registrations with the
+ * same name, even disabled ones, and Pi drops the registration without an
+ * error. Name the file so the collision is reported instead of silently
+ * replacing the session server. The project file only applies once the project
+ * is trusted, which the bridge cannot see, so it is reported as a possibility.
+ */
+function configuredShadow(name: string): string | undefined {
+  const global = join(agentDir(), 'mcp.json')
+  if (configuredServerNames(global).has(name)) return `Pi uses the same-named entry in ${global} instead`
+  const project = join(process.cwd(), '.pi', 'mcp.json')
+  if (configuredServerNames(project).has(name))
+    return `Pi uses the same-named entry in ${project} instead when the project is trusted`
+  return undefined
+}
+
 /**
  * This extension intentionally does not implement MCP. It hands standard ACP
  * session-scoped definitions from pi-acp to Pi's built-in MCP support through
- * `pi.registerMcpServer()`, without reading or writing MCP configuration files.
+ * `pi.registerMcpServer()`, without writing MCP configuration files.
  *
  * Registration happens while the extension loads, so the servers connect at
  * session start together with configured ones. Session MCP servers are best
@@ -52,6 +89,8 @@ export default function acpMcpBridge(pi: PiExtensionApi): void {
         if (typeof pi.registerMcpServer !== 'function')
           throw new Error('this Pi version has no built-in MCP support (pi.registerMcpServer); upgrade Pi')
         pi.registerMcpServer(name, definition)
+        const shadow = configuredShadow(name)
+        if (shadow) failures.push(`${name}: ${shadow}`)
       } catch (error) {
         failures.push(`${name}: ${describeError(error)}`)
       }

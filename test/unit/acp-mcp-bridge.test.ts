@@ -1,8 +1,16 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import acpMcpBridge from '../../src/acp-mcp-bridge.js'
 
 const ENV_NAME = 'PI_ACP_MCP_SERVERS'
+
+// Keep the bridge's `mcp.json` collision check away from the real agent directory.
+const isolatedAgentDir = mkdtempSync(join(tmpdir(), 'pi-acp-bridge-agent-'))
+process.env.PI_CODING_AGENT_DIR = isolatedAgentDir
+test.after(() => rmSync(isolatedAgentDir, { recursive: true, force: true }))
 
 type Listener = () => void | Promise<void>
 
@@ -104,5 +112,50 @@ test('ACP MCP bridge reports undecodable definitions', async () => {
   await withEncoded('not base64 json', async () => {
     const error = await sessionStartError(loadBridge(() => assert.fail('nothing should register')))
     assert.match(error.message, /^pi-acp MCP bridge: could not read session MCP servers \(could not decode/)
+  })
+})
+
+test('ACP MCP bridge reports a session server that a same-named global mcp.json entry replaces', async t => {
+  const configPath = join(isolatedAgentDir, 'mcp.json')
+  writeFileSync(
+    configPath,
+    JSON.stringify({ mcpServers: { webagent: { url: 'http://127.0.0.1:9/mcp', enabled: false } } })
+  )
+  t.after(() => rmSync(configPath, { force: true }))
+
+  await withDefinitions(
+    { webagent: { url: 'https://webagent.test/mcp' }, other: { url: 'https://other.test/mcp' } },
+    async () => {
+      const registered: string[] = []
+      const listeners = loadBridge(name => registered.push(name))
+
+      // Pi still receives the registration; the configured entry wins inside Pi.
+      assert.deepEqual(registered, ['webagent', 'other'])
+      const error = await sessionStartError(listeners)
+      assert.equal(
+        error.message,
+        `pi-acp MCP bridge: 1 of 2 session MCP server(s) did not attach (webagent: Pi uses the same-named entry in ${configPath} instead). The session continues without them.`
+      )
+    }
+  )
+})
+
+test('ACP MCP bridge reports a session server that a same-named project mcp.json entry may replace', async t => {
+  const project = mkdtempSync(join(tmpdir(), 'pi-acp-bridge-project-'))
+  mkdirSync(join(project, '.pi'))
+  writeFileSync(join(project, '.pi', 'mcp.json'), JSON.stringify({ mcpServers: { webagent: { command: 'node' } } }))
+  const previousCwd = process.cwd()
+  process.chdir(project)
+  t.after(() => {
+    process.chdir(previousCwd)
+    rmSync(project, { recursive: true, force: true })
+  })
+
+  await withDefinitions({ webagent: { url: 'https://webagent.test/mcp' } }, async () => {
+    const error = await sessionStartError(loadBridge(() => {}))
+    assert.match(
+      error.message,
+      /webagent: Pi uses the same-named entry in .*\.pi\/mcp\.json instead when the project is trusted/
+    )
   })
 })

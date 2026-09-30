@@ -252,6 +252,20 @@ test('translateAcpMcpServers rejects what Pi built-in MCP cannot connect and amb
   assert.throws(
     () =>
       translateAcpMcpServers([
+        { type: 'http', name: 'proto', url: 'https://example.test/mcp', headers: [{ name: '__proto__', value: 'x' }] }
+      ] as any),
+    /HTTP header name "__proto__" is not supported/
+  )
+  assert.throws(
+    () =>
+      translateAcpMcpServers([
+        { name: 'proto', command: 'node', args: [], env: [{ name: '__proto__', value: 'x' }] }
+      ] as any),
+    /environment variable name "__proto__" is not supported/
+  )
+  assert.throws(
+    () =>
+      translateAcpMcpServers([
         { type: 'http', name: 'one', url: 'https://example.test/mcp', headers: [] },
         { type: 'http', name: 'one', url: 'https://example.test/other', headers: [] }
       ] as any),

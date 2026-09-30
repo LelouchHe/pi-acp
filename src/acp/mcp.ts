@@ -50,6 +50,13 @@ function defineString(target: Record<string, string>, key: string, value: string
   })
 }
 
+// Pi copies env and header entries with plain assignment, so an entry named
+// `__proto__` would be dropped silently instead of reaching the server.
+function requireEntryName(name: string, kind: string): string {
+  if (name === '__proto__') invalid(`${kind} name ${JSON.stringify(name)} is not supported by pi`)
+  return name
+}
+
 function toEnvironment(entries: unknown): Record<string, string> {
   if (!Array.isArray(entries)) invalid('stdio env must be an array')
   const env: Record<string, string> = {}
@@ -61,7 +68,7 @@ function toEnvironment(entries: unknown): Record<string, string> {
     if (typeof value.value !== 'string')
       invalid(`environment variable ${JSON.stringify(value.name)} value must be a string`)
     if (Object.hasOwn(env, value.name)) invalid(`duplicate environment variable ${JSON.stringify(value.name)}`)
-    defineString(env, value.name, value.value)
+    defineString(env, requireEntryName(value.name, 'environment variable'), value.value)
   }
   return env
 }
@@ -78,7 +85,7 @@ function toHeaders(entries: unknown): Record<string, string> {
     const normalized = value.name.toLowerCase()
     if (names.has(normalized)) invalid(`duplicate HTTP header ${JSON.stringify(value.name)}`)
     names.add(normalized)
-    defineString(headers, value.name, value.value)
+    defineString(headers, requireEntryName(value.name, 'HTTP header'), value.value)
   }
   return headers
 }

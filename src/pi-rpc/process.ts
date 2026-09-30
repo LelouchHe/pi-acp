@@ -163,9 +163,12 @@ export class PiRpcProcess {
       const event = msg as PiRpcEvent
       if (event.type === 'extension_error' && typeof event.error === 'string') {
         // Session MCP servers are best effort: the bridge reports whatever did
-        // not attach here, and the session continues either way. Log it so an
+        // not attach here, and the session continues either way. Pi reports a
+        // registration no loaded extension connects (the built-in MCP support
+        // is disabled or replaced) as `register_mcp_server`. Log both so an
         // operator can see why the session has no task tooling.
-        if (event.error.startsWith('pi-acp MCP bridge:')) console.error(event.error)
+        if (event.error.startsWith('pi-acp MCP bridge:') || event.event === 'register_mcp_server')
+          console.error(event.error)
       }
       for (const h of this.eventHandlers) h(event)
     })
