@@ -12,7 +12,7 @@ const isolatedAgentDir = mkdtempSync(join(tmpdir(), 'pi-acp-bridge-agent-'))
 process.env.PI_CODING_AGENT_DIR = isolatedAgentDir
 test.after(() => rmSync(isolatedAgentDir, { recursive: true, force: true }))
 
-type Listener = () => void | Promise<void>
+type Listener = (event: unknown, ctx?: { isProjectTrusted?(): boolean }) => void | Promise<void>
 
 function withEncoded(encoded: string | undefined, run: () => Promise<void> | void): Promise<void> {
   const previous = process.env[ENV_NAME]
@@ -41,11 +41,14 @@ function loadBridge(registerMcpServer?: (name: string, config: Record<string, un
   return listeners
 }
 
-async function sessionStartError(listeners: Map<string, Listener>): Promise<Error> {
-  const start = listeners.get('session_start')
-  assert.ok(start, 'expected a session_start report')
+async function sessionStart(listeners: Map<string, Listener>, projectTrusted = false): Promise<void> {
+  await listeners.get('session_start')?.({ type: 'session_start' }, { isProjectTrusted: () => projectTrusted })
+}
+
+async function sessionStartError(listeners: Map<string, Listener>, projectTrusted = false): Promise<Error> {
+  assert.ok(listeners.get('session_start'), 'expected a session_start report')
   try {
-    await start()
+    await sessionStart(listeners, projectTrusted)
   } catch (error) {
     return error instanceof Error ? error : new Error(String(error))
   }
@@ -57,13 +60,13 @@ test('ACP MCP bridge registers every definition with Pi while the extension load
     remote: { url: 'https://example.test/mcp', headers: { Authorization: 'Bearer test' }, exposure: 'direct' },
     local: { command: 'node', args: ['server.mjs'], env: {} }
   }
-  await withDefinitions(definitions, () => {
+  await withDefinitions(definitions, async () => {
     const registered: Array<[string, unknown]> = []
     const listeners = loadBridge((name, config) => registered.push([name, config]))
 
     assert.deepEqual(registered, Object.entries(definitions))
-    // Nothing failed, so there is nothing to report at session start.
-    assert.equal(listeners.size, 0)
+    // Nothing failed, so session start reports nothing.
+    await sessionStart(listeners)
   })
 })
 
@@ -140,7 +143,7 @@ test('ACP MCP bridge reports a session server that a same-named global mcp.json 
   )
 })
 
-test('ACP MCP bridge reports a session server that a same-named project mcp.json entry may replace', async t => {
+test('ACP MCP bridge reports a same-named project mcp.json entry only for a trusted project', async t => {
   const project = mkdtempSync(join(tmpdir(), 'pi-acp-bridge-project-'))
   mkdirSync(join(project, '.pi'))
   writeFileSync(join(project, '.pi', 'mcp.json'), JSON.stringify({ mcpServers: { webagent: { command: 'node' } } }))
@@ -152,10 +155,41 @@ test('ACP MCP bridge reports a session server that a same-named project mcp.json
   })
 
   await withDefinitions({ webagent: { url: 'https://webagent.test/mcp' } }, async () => {
-    const error = await sessionStartError(loadBridge(() => {}))
-    assert.match(
-      error.message,
-      /webagent: Pi uses the same-named entry in .*\.pi\/mcp\.json instead when the project is trusted/
+    const error = await sessionStartError(
+      loadBridge(() => {}),
+      true
+    )
+    assert.match(error.message, /webagent: Pi uses the same-named entry in .*\.pi\/mcp\.json instead\)/)
+    // Pi ignores the project file of an untrusted project, so nothing is replaced.
+    await sessionStart(
+      loadBridge(() => {}),
+      false
     )
   })
+})
+
+test('ACP MCP bridge ignores same-named mcp.json entries Pi would skip as invalid', async t => {
+  const configPath = join(isolatedAgentDir, 'mcp.json')
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      mcpServers: {
+        missing: { enabled: false },
+        legacy: { type: 'sse', url: 'https://legacy.test/sse' },
+        notObject: 'x'
+      }
+    })
+  )
+  t.after(() => rmSync(configPath, { force: true }))
+
+  await withDefinitions(
+    {
+      missing: { url: 'https://missing.test/mcp' },
+      legacy: { url: 'https://legacy.test/mcp' },
+      notObject: { url: 'https://not-object.test/mcp' }
+    },
+    async () => {
+      await sessionStart(loadBridge(() => {}))
+    }
+  )
 })
