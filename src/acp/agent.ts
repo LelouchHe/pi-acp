@@ -13,6 +13,7 @@ import {
   type NewSessionRequest,
   type PromptRequest,
   type PromptResponse,
+  type ResumeSessionRequest,
   type SessionConfigOption,
   type SessionInfo,
   type SetSessionConfigOptionRequest,
@@ -282,7 +283,9 @@ export class PiAcpAgent implements ACPAgent {
           // **UNSTABLE** ACP capability used by Zed's codex-acp adapter.
           // Enables a native session picker in clients that support it.
           list: {},
-          delete: {}
+          delete: {},
+          // Stable ACP capability (v1): reconnect to a stored session without replaying history.
+          resume: {}
         }
       }
     }
@@ -1162,6 +1165,85 @@ export class PiAcpAgent implements ACPAgent {
     }, 0)
 
     return response
+  }
+
+  async resumeSession(params: ResumeSessionRequest) {
+    if (!isAbsolute(params.cwd)) {
+      throw RequestError.invalidParams(`cwd must be an absolute path: ${params.cwd}`)
+    }
+    const mcpServers = toPiMcpServerDefinitions(params.mcpServers ?? [])
+
+    this.lastSessionCwd = params.cwd
+
+    // Unlike session/load, resume must not replay history. It also must not tear down a
+    // session that is already live: restoreSession returns the live session untouched, so
+    // resuming again only re-reads and returns its current configuration.
+    const alreadyLive = this.sessions.maybeGet(params.sessionId)
+    const session = await this.restoreSession(params.sessionId, {
+      cwd: params.cwd,
+      mcpServers
+    })
+    const proc = session.proc
+
+    let configuration: Awaited<ReturnType<typeof getSessionConfiguration>>
+    try {
+      configuration = await getSessionConfiguration(proc)
+    } catch (err) {
+      if (!alreadyLive) this.sessions.close(session.sessionId)
+      throw err
+    }
+    const { configOptions, models, modes } = configuration
+
+    // A live session already advertised its commands; re-sending them would make resume
+    // non-idempotent. A freshly restored session still needs them, exactly like load.
+    if (!alreadyLive) {
+      const enableSkillCommands = getEnableSkillCommands(params.cwd)
+      const fileCommands = loadSlashCommands(params.cwd)
+
+      setTimeout(() => {
+        void (async () => {
+          await session.publishContextUsage()
+
+          try {
+            const pi = (await proc.getCommands()) as any
+            const { commands } = toAvailableCommandsFromPiGetCommands(pi, {
+              enableSkillCommands,
+              includeExtensionCommands: this.includeExtensionCommands
+            })
+
+            await this.conn.sessionUpdate({
+              sessionId: session.sessionId,
+              update: {
+                sessionUpdate: 'available_commands_update',
+                availableCommands: mergeCommands(commands, builtinAvailableCommands())
+              }
+            })
+            return
+          } catch {
+            // fall back
+          }
+
+          await this.conn.sessionUpdate({
+            sessionId: session.sessionId,
+            update: {
+              sessionUpdate: 'available_commands_update',
+              availableCommands: mergeCommands(toAvailableCommands(fileCommands), builtinAvailableCommands())
+            }
+          })
+        })()
+      }, 0)
+    }
+
+    return {
+      configOptions,
+      models,
+      modes,
+      _meta: {
+        piAcp: {
+          startupInfo: null
+        }
+      }
+    }
   }
 
   async deleteSession(params: DeleteSessionRequest): Promise<DeleteSessionResponse> {
