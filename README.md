@@ -3,6 +3,7 @@
 This fork adds behavior needed by multi-session ACP clients such as WebAgent:
 
 - Keeps multiple ACP sessions live in the same connection instead of closing the previous pi subprocess when another session is created or loaded.
+- Advertises the standard ACP `sessionCapabilities.resume` capability and implements `session/resume`: it reconnects to a stored Pi session and returns the same `configOptions`, `models`, `modes`, and `_meta` as `session/load`, but never replays the stored transcript as synthetic `session/update` messages. `session/load` is unchanged and still replays history. Resuming a session that is already live is idempotent: the existing Pi subprocess is reused and its current configuration is returned instead of being torn down and rebuilt.
 - Publishes Pi's current context-window usage and cumulative cost through the standard ACP `usage_update` session update after session creation/loading, settled turns, compaction, and model changes.
 - Includes current context usage in the built-in `/session` output when Pi reports it.
 - Emits Bash output as standard textual ACP tool content while retaining the existing terminal metadata for clients that support it.
@@ -69,6 +70,7 @@ Expect some minor breaking changes.
 - Session persistence
   - pi stores its own sessions in `~/.pi/agent/sessions/...`
   - `pi-acp` stores a small mapping file at `~/.pi/pi-acp/session-map.json` so `session/load` can reattach to a previous pi session file
+  - `session/resume` reattaches to the same stored pi session file and returns the session configuration without replaying the conversation history; `session/load` keeps its history replay
 - Slash commands
   - Loads file-based slash commands compatible with pi’s conventions
   - Adds a small set of built-in commands for headless/editor usage
@@ -79,7 +81,7 @@ Expect some minor breaking changes.
   - Right after compaction pi may not have a trustworthy token count yet, so the client keeps the previous value until the next model response
 - Skills are loaded by pi directly and are available in ACP sessions
 - (Zed) `pi-acp` emits “startup info” block into the session (pi version, context, skills, prompts, extensions - similar to `pi` in the terminal). You can disable it by setting `quietStartup: true` in pi settings (`~/.pi/agent/settings.json` or `<project>/.pi/settings.json`). When `quietStartup` is enabled, `pi-acp` will still emit a 'New version available' message if the installed pi version is outdated.
-- (Zed) Session history is supported in Zed starting with [`v0.225.0`](https://zed.dev/releases/preview/0.225.0). Session loading / history maps to pi's session files. Sessions can be resumed both in `pi` and in the ACP client.
+- (Zed) Session history is supported in Zed starting with [`v0.225.0`](https://zed.dev/releases/preview/0.225.0). Session loading / history maps to pi's session files. Sessions can be resumed both in `pi` and in the ACP client, and `pi-acp` advertises `session/resume` for clients that reconnect without replaying history.
 
 ## Prerequisites
 
