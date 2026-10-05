@@ -37,6 +37,8 @@ test('PiAcpSession: names a new session when its first prompt starts', async () 
   }
   const session = createSession(conn, proc)
 
+  session.setStartupInfo('Welcome to pi')
+  session.sendStartupInfoIfPending()
   const prompt = session.prompt('hello', [], 'Fix thread titles')
   await new Promise(resolve => setImmediate(resolve))
 
@@ -115,4 +117,22 @@ test('PiAcpSession: forwards Pi session name changes to ACP', async () => {
 
   const titleUpdate = conn.updates.find(update => (update.update as any).title !== undefined)
   assert.equal((titleUpdate!.update as any).title, 'Extension title')
+})
+
+test('PiAcpSession: ignores duplicate and malformed names but forwards a cleared name', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+  createSession(conn, proc, { autoTitle: false })
+
+  proc.emit({ type: 'session_info_changed', name: 'Manual title' })
+  proc.emit({ type: 'session_info_changed', name: 'Manual title' })
+  proc.emit({ type: 'session_info_changed', name: 123 })
+  proc.emit({ type: 'session_info_changed', name: { text: 'invalid' } })
+  proc.emit({ type: 'session_info_changed', name: 'Manual title' })
+  proc.emit({ type: 'session_info_changed' })
+  proc.emit({ type: 'session_info_changed' })
+  await new Promise(resolve => setImmediate(resolve))
+
+  const titles = conn.updates.flatMap(({ update }) => ('title' in update ? [update.title] : []))
+  assert.deepEqual(titles, ['Manual title', null])
 })

@@ -441,14 +441,15 @@ export class PiAcpSession {
     return result
   }
 
-  private publishTitle(title: string | null): void {
-    if (this.lastPublishedTitle === title) return
+  publishTitle(title: string | null, updatedAt: string | null = new Date().toISOString()): Promise<void> {
+    if (this.lastPublishedTitle === title) return this.lastEmit
     this.lastPublishedTitle = title
     this.emit({
       sessionUpdate: 'session_info_update',
       title,
-      updatedAt: new Date().toISOString()
+      ...(updatedAt ? { updatedAt } : {})
     })
+    return this.lastEmit
   }
 
   private async maybeAutoTitle(title?: string): Promise<void> {
@@ -639,8 +640,8 @@ export class PiAcpSession {
 
     switch (type) {
       case 'session_info_changed': {
-        const name = typeof (ev as { name?: unknown }).name === 'string' ? String((ev as { name: string }).name) : null
-        this.publishTitle(name)
+        const name = (ev as { name?: unknown }).name
+        if (typeof name === 'string' || name === undefined) this.publishTitle(name ?? null)
         break
       }
 
