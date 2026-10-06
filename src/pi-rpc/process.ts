@@ -185,7 +185,7 @@ export class PiRpcProcess {
     })
   }
 
-  static async spawn(params: SpawnParams): Promise<PiRpcProcess> {
+  static async spawn(params: SpawnParams, onProcessCreated?: (proc: PiRpcProcess) => void): Promise<PiRpcProcess> {
     // On Windows, npm commonly creates pi.cmd / pi.bat launcher scripts.
     const cmd = getPiCommand(params.piCommand)
 
@@ -252,6 +252,7 @@ export class PiRpcProcess {
     })
 
     const proc = new PiRpcProcess(child)
+    onProcessCreated?.(proc)
 
     // Best-effort handshake.
     // Important: pi may emit a get_state response pointing at a sessionFile in a directory
