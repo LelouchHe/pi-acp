@@ -882,12 +882,13 @@ test('PiAcpAgent: delete terminates a real child during a stuck Pi RPC handshake
     const startedAt = Date.now()
     deletion = agent.deleteSession({ sessionId } as any)
     assert.deepEqual(await deletion, {})
+    assert.equal(existsSync(signalFile), true, 'delete should send SIGTERM to the handshake child')
+    assert.match(readFileSync(signalFile, 'utf-8'), /TERM/)
+    assert.equal(processIsAlive(pid), false)
     assert.ok(
       Date.now() - startedAt < 2_300,
       'delete should stop the child rather than wait for the full restore drain'
     )
-    assert.match(readFileSync(signalFile, 'utf-8'), /TERM/)
-    assert.equal(processIsAlive(pid), false)
     assert.equal(existsSync(sessionFile), false)
     assert.equal(await restore, 'rejected')
   } finally {
