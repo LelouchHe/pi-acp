@@ -712,7 +712,8 @@ test('PiAcpAgent: delete retries cleanup after store discovery fails but still s
   })
 
   try {
-    await assert.rejects(agent.deleteSession({ sessionId } as any), /transient store lookup failure/)
+    assert.deepEqual(await agent.deleteSession({ sessionId } as any), {})
+    assert.equal((agent as any).deletedSessionIds.get(sessionId), 'pending')
     assert.equal(stopCalls, 1)
     assert.ok(warnings.some(args => String(args[0]).includes('stored session')))
     writeFileSync(
@@ -781,7 +782,8 @@ test('PiAcpAgent: failed Pi discovery warns, stops runtime, and can be retried',
   })
 
   try {
-    await assert.rejects(agent.deleteSession({ sessionId } as any), /temporary Pi discovery failure/)
+    assert.deepEqual(await agent.deleteSession({ sessionId } as any), {})
+    assert.equal((agent as any).deletedSessionIds.get(sessionId), 'pending')
     assert.equal(stopCalls, 1)
     assert.ok(warnings.some(args => String(args[0]).includes('discover pi session')))
 
@@ -817,6 +819,246 @@ test('PiAcpAgent: an unknown delete does not retain a tombstone', async () => {
   } finally {
     if (oldEnv === undefined) delete process.env.PI_CODING_AGENT_DIR
     else process.env.PI_CODING_AGENT_DIR = oldEnv
+  }
+})
+
+test('PiAcpAgent: unlink failure is best-effort and keeps the file path for retry', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'pi-acp-delete-unlink-retry-'))
+  const sessionsDir = join(root, 'project-session-files')
+  mkdirSync(sessionsDir, { recursive: true })
+  const sessionId = 'unlink-retry-session'
+  const sessionFile = join(sessionsDir, '0000_unlink_retry.jsonl')
+  writeFileSync(
+    sessionFile,
+    `${JSON.stringify({ type: 'session', version: 3, id: sessionId, timestamp: '2026-06-16T00:00:00.000Z', cwd: root })}\n`,
+    'utf-8'
+  )
+  const oldEnv = process.env.PI_CODING_AGENT_DIR
+  process.env.PI_CODING_AGENT_DIR = root
+
+  const conn = new FakeAgentSideConnection()
+  const agent = new PiAcpAgent(asAgentConn(conn))
+  let storedEntry: { sessionId: string; cwd: string; sessionFile: string; updatedAt: string } | null = {
+    sessionId,
+    cwd: root,
+    sessionFile,
+    updatedAt: ''
+  }
+  let unlinkAttempts = 0
+  let storeDeletes = 0
+  const warnings: unknown[][] = []
+  const originalWarn = console.warn
+  const realUnlink = (agent as any).unlinkSessionFile.bind(agent)
+  console.warn = (...args: unknown[]) => warnings.push(args)
+  ;(agent as any).unlinkSessionFile = (path: string) => {
+    unlinkAttempts += 1
+    if (unlinkAttempts === 1) {
+      console.warn(`Failed to unlink pi session file ${path}`, new Error('temporary unlink failure'))
+      return new Error('temporary unlink failure')
+    }
+    return realUnlink(path)
+  }
+  ;(agent as any).store = {
+    get: () => storedEntry,
+    delete() {
+      storeDeletes += 1
+      storedEntry = null
+    },
+    upsert() {}
+  }
+
+  try {
+    assert.deepEqual(await agent.deleteSession({ sessionId } as any), {})
+    assert.equal((agent as any).deletedSessionIds.get(sessionId), 'pending')
+    assert.equal(existsSync(sessionFile), true)
+    assert.ok(warnings.some(args => String(args[0]).includes('unlink pi session file')))
+
+    assert.deepEqual(await agent.deleteSession({ sessionId } as any), {})
+    assert.equal(unlinkAttempts, 2)
+    assert.equal(storeDeletes, 2)
+    assert.equal((agent as any).deletedSessionIds.get(sessionId), 'complete')
+    assert.equal(existsSync(sessionFile), false)
+  } finally {
+    console.warn = originalWarn
+    if (oldEnv === undefined) delete process.env.PI_CODING_AGENT_DIR
+    else process.env.PI_CODING_AGENT_DIR = oldEnv
+  }
+})
+
+test('PiAcpAgent: store delete failure is best-effort and remains retryable', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'pi-acp-delete-store-retry-'))
+  const sessionsDir = join(root, 'sessions')
+  mkdirSync(sessionsDir, { recursive: true })
+  const sessionId = 'store-delete-retry-session'
+  const sessionFile = join(sessionsDir, '0000_store_retry.jsonl')
+  writeFileSync(
+    sessionFile,
+    `${JSON.stringify({ type: 'session', version: 3, id: sessionId, timestamp: '2026-06-16T00:00:00.000Z', cwd: root })}\n`,
+    'utf-8'
+  )
+  const oldEnv = process.env.PI_CODING_AGENT_DIR
+  process.env.PI_CODING_AGENT_DIR = root
+
+  const conn = new FakeAgentSideConnection()
+  const agent = new PiAcpAgent(asAgentConn(conn))
+  let deleteCalls = 0
+  let storedEntry: { sessionId: string; cwd: string; sessionFile: string; updatedAt: string } | null = {
+    sessionId,
+    cwd: root,
+    sessionFile,
+    updatedAt: ''
+  }
+  const warnings: unknown[][] = []
+  const originalWarn = console.warn
+  console.warn = (...args: unknown[]) => warnings.push(args)
+  ;(agent as any).store = {
+    get: () => storedEntry,
+    delete() {
+      deleteCalls += 1
+      if (deleteCalls === 1) throw new Error('temporary store delete failure')
+      storedEntry = null
+    },
+    upsert() {}
+  }
+
+  try {
+    assert.deepEqual(await agent.deleteSession({ sessionId } as any), {})
+    assert.equal((agent as any).deletedSessionIds.get(sessionId), 'pending')
+    assert.equal(storedEntry?.sessionId, sessionId)
+    assert.ok(warnings.some(args => String(args[0]).includes('clear stored session')))
+
+    assert.deepEqual(await agent.deleteSession({ sessionId } as any), {})
+    assert.equal(deleteCalls, 2)
+    assert.equal(storedEntry, null)
+    assert.equal((agent as any).deletedSessionIds.get(sessionId), 'complete')
+  } finally {
+    console.warn = originalWarn
+    if (oldEnv === undefined) delete process.env.PI_CODING_AGENT_DIR
+    else process.env.PI_CODING_AGENT_DIR = oldEnv
+  }
+})
+
+test('PiAcpAgent: discovery errors for an unknown ID warn and remain idempotent without tombstone', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'pi-acp-delete-unknown-discovery-error-'))
+  mkdirSync(join(root, 'sessions'), { recursive: true })
+  const oldEnv = process.env.PI_CODING_AGENT_DIR
+  process.env.PI_CODING_AGENT_DIR = root
+
+  const conn = new FakeAgentSideConnection()
+  const agent = new PiAcpAgent(asAgentConn(conn))
+  const warnings: unknown[][] = []
+  const originalWarn = console.warn
+  console.warn = (...args: unknown[]) => warnings.push(args)
+  ;(agent as any).store = { get: () => null, delete() {}, upsert() {} }
+  ;(agent as any).discoverPiSession = () => {
+    throw new Error('discovery unavailable')
+  }
+
+  try {
+    assert.deepEqual(await agent.deleteSession({ sessionId: 'unseen-id' } as any), {})
+    assert.equal((agent as any).deletedSessionIds.has('unseen-id'), false)
+    assert.ok(warnings.some(args => String(args[0]).includes('discover pi session')))
+  } finally {
+    console.warn = originalWarn
+    if (oldEnv === undefined) delete process.env.PI_CODING_AGENT_DIR
+    else process.env.PI_CODING_AGENT_DIR = oldEnv
+  }
+})
+
+test('PiAcpAgent: late restore unlink failure retains its path for a later delete', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'pi-acp-delete-late-unlink-retry-'))
+  const sessionsDir = join(root, 'project-session-files')
+  mkdirSync(sessionsDir, { recursive: true })
+  const sessionId = 'late-unlink-retry-session'
+  const sessionFile = join(sessionsDir, '0000_late_unlink.jsonl')
+  writeFileSync(
+    sessionFile,
+    `${JSON.stringify({ type: 'session', version: 3, id: sessionId, timestamp: '2026-06-16T00:00:00.000Z', cwd: root })}\n`,
+    'utf-8'
+  )
+  const oldEnv = {
+    agentDir: process.env.PI_CODING_AGENT_DIR,
+    piCommand: process.env.PI_ACP_PI_COMMAND
+  }
+  process.env.PI_CODING_AGENT_DIR = root
+
+  const conn = new FakeAgentSideConnection()
+  const agent = new PiAcpAgent(asAgentConn(conn))
+  const spawnStarted = deferred<void>()
+  const spawnResult = deferred<PiRpcProcess>()
+  const spawnedProc = {
+    onEvent() {
+      return () => {}
+    },
+    async terminateAndWait() {
+      writeFileSync(sessionFile, 'late pi write\n', 'utf-8')
+      return true
+    },
+    dispose() {}
+  }
+  let storedEntry: { sessionId: string; cwd: string; sessionFile: string; updatedAt: string } | null = {
+    sessionId,
+    cwd: root,
+    sessionFile,
+    updatedAt: ''
+  }
+  let unlinkAttempts = 0
+  const originalSpawn = PiRpcProcess.spawn
+  const originalWarn = console.warn
+  const warnings: unknown[][] = []
+  PiRpcProcess.spawn = async () => {
+    spawnStarted.resolve()
+    return spawnResult.promise
+  }
+  console.warn = (...args: unknown[]) => warnings.push(args)
+  ;(agent as any).store = {
+    get: () => storedEntry,
+    delete() {
+      storedEntry = null
+    },
+    upsert() {}
+  }
+  const realUnlink = (agent as any).unlinkSessionFile.bind(agent)
+  ;(agent as any).unlinkSessionFile = (path: string) => {
+    unlinkAttempts += 1
+    if (unlinkAttempts === 2) {
+      console.warn(`Failed to unlink pi session file ${path}`, new Error('late unlink failure'))
+      return new Error('late unlink failure')
+    }
+    return realUnlink(path)
+  }
+
+  let restore: Promise<string> | undefined
+  let deletion: Promise<unknown> | undefined
+  try {
+    restore = (agent as any).restoreSession(sessionId).then(
+      () => 'restored',
+      () => 'rejected'
+    )
+    await spawnStarted.promise
+    deletion = agent.deleteSession({ sessionId } as any)
+    assert.deepEqual(await deletion, {})
+    assert.equal((agent as any).deletedSessionIds.get(sessionId), 'pending')
+    assert.equal(existsSync(sessionFile), false)
+
+    spawnResult.resolve(spawnedProc as unknown as PiRpcProcess)
+    assert.equal(await restore, 'rejected')
+    assert.equal(unlinkAttempts, 2)
+    assert.equal((agent as any).deletedSessionIds.get(sessionId), 'pending')
+    assert.equal(existsSync(sessionFile), true)
+    assert.ok(warnings.some(args => args.some(arg => String(arg).includes('late unlink failure'))))
+
+    assert.deepEqual(await agent.deleteSession({ sessionId } as any), {})
+    assert.equal(existsSync(sessionFile), false)
+    assert.equal(unlinkAttempts, 3)
+    assert.equal((agent as any).deletedSessionIds.get(sessionId), 'complete')
+  } finally {
+    spawnResult.resolve(spawnedProc as unknown as PiRpcProcess)
+    await Promise.allSettled([...(restore ? [restore] : []), ...(deletion ? [deletion] : [])])
+    PiRpcProcess.spawn = originalSpawn
+    console.warn = originalWarn
+    process.env.PI_CODING_AGENT_DIR = oldEnv.agentDir
+    process.env.PI_ACP_PI_COMMAND = oldEnv.piCommand
   }
 })
 

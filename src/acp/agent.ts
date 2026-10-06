@@ -143,6 +143,7 @@ export class PiAcpAgent implements ACPAgent {
   private readonly restoringSessions = new Map<string, Promise<PiAcpSession>>()
   private readonly restoringProcesses = new Map<string, Set<PiRpcProcess>>()
   private readonly failedStopProcesses = new Map<string, Set<PiRpcProcess>>()
+  private readonly pendingDeleteSessionFiles = new Map<string, string>()
   private readonly deletingSessions = new Map<string, Promise<void>>()
   private readonly deletedSessionIds = new Map<string, 'pending' | 'complete'>()
   private readonly approveProject: boolean
@@ -274,6 +275,18 @@ export class PiAcpAgent implements ACPAgent {
     }
   }
 
+  private retainPendingSessionFile(sessionId: string, sessionFile: string): void {
+    this.pendingDeleteSessionFiles.set(sessionId, sessionFile)
+    if (this.deletedSessionIds.get(sessionId) === 'complete') this.deletedSessionIds.set(sessionId, 'pending')
+  }
+
+  private tryUnlinkSessionFile(sessionId: string, sessionFile: string): boolean {
+    const error = this.unlinkSessionFile(sessionFile)
+    if (!error) return true
+    this.retainPendingSessionFile(sessionId, sessionFile)
+    return false
+  }
+
   private async waitForRestoreDuringDelete(restore: Promise<PiAcpSession>): Promise<boolean> {
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
@@ -340,7 +353,7 @@ export class PiAcpAgent implements ACPAgent {
 
       if (this.deletedSessionIds.has(sessionId)) {
         await this.stopPiProcessForDelete(sessionId, proc)
-        this.unlinkSessionFile(stored.sessionFile)
+        this.tryUnlinkSessionFile(sessionId, stored.sessionFile)
         throw RequestError.invalidParams(`Session has been deleted: ${sessionId}`)
       }
 
@@ -1416,14 +1429,13 @@ export class PiAcpAgent implements ACPAgent {
     )
 
     // Unknown deletes remain idempotent but must not create permanent tombstones.
-    if (!known) {
-      if (storeLookupError) throw storeLookupError
-      if (piDiscoveryError) throw piDiscoveryError
-      return
-    }
+    if (!known) return
+
+    const sessionFile = stored?.sessionFile ?? piSession?.sessionFile ?? this.pendingDeleteSessionFiles.get(sessionId)
 
     // This synchronous marker blocks old restores before teardown yields to the event loop.
     this.deletedSessionIds.set(sessionId, 'pending')
+    if (sessionFile) this.pendingDeleteSessionFiles.set(sessionId, sessionFile)
 
     if (runtimeSession) runtimeSession.shutdownForDelete()
 
@@ -1441,13 +1453,7 @@ export class PiAcpAgent implements ACPAgent {
       this.sessions.removeIfSame(sessionId, runtimeSession)
     }
 
-    let cleanupError: unknown
-    let cleanupFailed = false
-    const sessionFile = stored?.sessionFile ?? piSession?.sessionFile
-    if ((storeLookupError || piDiscoveryError) && !sessionFile) {
-      cleanupError = storeLookupError ?? piDiscoveryError
-      cleanupFailed = true
-    }
+    if ((storeLookupError || piDiscoveryError) && !sessionFile) teardownIncomplete = true
 
     if (inFlightRestore) {
       const drained = await this.waitForRestoreDuringDelete(inFlightRestore)
@@ -1457,25 +1463,20 @@ export class PiAcpAgent implements ACPAgent {
       }
     }
 
-    if (sessionFile) {
-      const unlinkError = this.unlinkSessionFile(sessionFile)
-      if (unlinkError) {
-        cleanupError ??= unlinkError
-        cleanupFailed = true
-      }
-    }
+    if (sessionFile && !this.tryUnlinkSessionFile(sessionId, sessionFile)) teardownIncomplete = true
 
     try {
       this.store.delete(sessionId)
     } catch (error) {
       console.warn(`Failed to clear stored session ${sessionId} during delete`, error)
-      cleanupError ??= error
-      cleanupFailed = true
+      teardownIncomplete = true
     }
 
     if ((this.failedStopProcesses.get(sessionId)?.size ?? 0) > 0) teardownIncomplete = true
-    if (cleanupFailed) throw cleanupError ?? new Error(`Failed to fully delete session ${sessionId}`)
-    if (!teardownIncomplete) this.deletedSessionIds.set(sessionId, 'complete')
+    if (!teardownIncomplete) {
+      this.deletedSessionIds.set(sessionId, 'complete')
+      this.pendingDeleteSessionFiles.delete(sessionId)
+    }
   }
 
   async unstable_setSessionModel(params: { sessionId: string; modelId: string }): Promise<void> {
