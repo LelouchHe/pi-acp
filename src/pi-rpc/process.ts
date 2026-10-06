@@ -288,6 +288,49 @@ export class PiRpcProcess {
     }
   }
 
+  /** Send SIGTERM, escalate to SIGKILL, and report whether the child exited in time. */
+  async terminateAndWait(termTimeoutMs = 1_000, killTimeoutMs = 1_000): Promise<boolean> {
+    if (this.hasExited()) return true
+
+    this.sendSignal('SIGTERM')
+    if (await this.waitForExit(termTimeoutMs)) return true
+
+    this.sendSignal('SIGKILL')
+    return this.waitForExit(killTimeoutMs)
+  }
+
+  private hasExited(): boolean {
+    return this.child.exitCode !== null || this.child.signalCode !== null
+  }
+
+  private sendSignal(signal: NodeJS.Signals): void {
+    try {
+      this.child.kill(signal)
+    } catch {
+      // The wait below determines whether the process actually exited.
+    }
+  }
+
+  private waitForExit(timeoutMs: number): Promise<boolean> {
+    if (this.hasExited()) return Promise.resolve(true)
+
+    return new Promise(resolve => {
+      let settled = false
+      const finish = () => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        this.child.off('exit', onExit)
+        resolve(this.hasExited())
+      }
+      const onExit = () => finish()
+      const timer = setTimeout(finish, timeoutMs)
+
+      this.child.once('exit', onExit)
+      if (this.hasExited()) finish()
+    })
+  }
+
   /**
    * Human-readable stdout lines emitted before RPC NDJSON begins (e.g. Context/Skills/Extensions info).
    * Themes are typically noisy/less useful for ACP, so callers can filter as needed.

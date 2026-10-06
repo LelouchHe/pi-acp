@@ -1249,12 +1249,25 @@ export class PiAcpAgent implements ACPAgent {
   async deleteSession(params: DeleteSessionRequest): Promise<DeleteSessionResponse> {
     const stored = this.store.get(params.sessionId)
     const piSession = findPiSession(params.sessionId)
+    const runtimeSession = this.sessions.maybeGet(params.sessionId)
 
     // Per ACP session/delete semantics, deleting a session that does not
     // exist (or is already gone) should succeed idempotently.
     // https://agentclientprotocol.com/protocol/v2/session-delete#semantics
-    if (!stored && !piSession) {
+    if (!stored && !piSession && !runtimeSession) {
       return {}
+    }
+
+    if (runtimeSession) {
+      try {
+        const stopped = await runtimeSession.proc.terminateAndWait()
+        if (!stopped) {
+          console.warn(`Failed to stop pi process for session ${params.sessionId} before delete`)
+        }
+      } catch (error) {
+        console.warn(`Failed to stop pi process for session ${params.sessionId} before delete`, error)
+      }
+      this.sessions.close(params.sessionId)
     }
 
     const sessionFile = stored?.sessionFile ?? piSession?.sessionFile
