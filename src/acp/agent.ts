@@ -62,6 +62,7 @@ type AdvertisedModel = {
 
 const MODEL_CONFIG_ID = 'model'
 const THOUGHT_LEVEL_CONFIG_ID = 'thought_level'
+const DELETE_RESTORE_DRAIN_MS = 2_500
 
 function toPiMcpServerDefinitions(mcpServers: McpServer[]): PiMcpServerDefinitions {
   try {
@@ -140,6 +141,8 @@ export class PiAcpAgent implements ACPAgent {
   private readonly sessions = new SessionManager()
   private readonly store = new SessionStore()
   private readonly restoringSessions = new Map<string, Promise<PiAcpSession>>()
+  private readonly deletingSessions = new Map<string, Promise<void>>()
+  private readonly deletedSessionIds = new Set<string>()
   private readonly approveProject: boolean
   private readonly includeExtensionCommands: boolean
 
@@ -196,15 +199,53 @@ export class PiAcpAgent implements ACPAgent {
     }
   }
 
+  private assertSessionNotDeleted(sessionId: string): void {
+    if (this.deletedSessionIds.has(sessionId)) {
+      throw RequestError.invalidParams(`Session has been deleted: ${sessionId}`)
+    }
+  }
+
+  private async stopPiProcessForDelete(sessionId: string, proc: PiRpcProcess): Promise<void> {
+    try {
+      const stopped = await proc.terminateAndWait()
+      if (!stopped) console.warn(`Failed to stop pi process for session ${sessionId} before delete`)
+    } catch (error) {
+      console.warn(`Failed to stop pi process for session ${sessionId} before delete`, error)
+    }
+  }
+
+  private async waitForRestoreDuringDelete(restore: Promise<PiAcpSession>): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        restore.then(
+          () => undefined,
+          () => undefined
+        ),
+        new Promise<void>(resolve => {
+          timer = setTimeout(resolve, DELETE_RESTORE_DRAIN_MS)
+        })
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
   private async restoreSession(
     sessionId: string,
     opts?: { cwd?: string; mcpServers?: PiMcpServerDefinitions }
   ): Promise<PiAcpSession> {
+    this.assertSessionNotDeleted(sessionId)
+
     const existing = this.sessions.maybeGet(sessionId)
     if (existing) return existing
 
     const inFlight = this.restoringSessions.get(sessionId)
-    if (inFlight) return inFlight
+    if (inFlight) {
+      const session = await inFlight
+      this.assertSessionNotDeleted(sessionId)
+      return session
+    }
 
     const restorePromise = (async () => {
       const stored = this.findStoredSession(sessionId)
@@ -228,6 +269,11 @@ export class PiAcpAgent implements ACPAgent {
           throw RequestError.internalError({ code: e?.code }, String(e?.message ?? e))
         }
         throw e
+      }
+
+      if (this.deletedSessionIds.has(sessionId)) {
+        await this.stopPiProcessForDelete(sessionId, proc)
+        throw RequestError.invalidParams(`Session has been deleted: ${sessionId}`)
       }
 
       const fileCommands = loadSlashCommands(cwd)
@@ -971,6 +1017,7 @@ export class PiAcpAgent implements ACPAgent {
   }
 
   async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
+    this.assertSessionNotDeleted(params.sessionId)
     if (!isAbsolute(params.cwd)) {
       throw RequestError.invalidParams(`cwd must be an absolute path: ${params.cwd}`)
     }
@@ -998,9 +1045,10 @@ export class PiAcpAgent implements ACPAgent {
     try {
       configuration = await getSessionConfiguration(proc)
     } catch (err) {
-      this.sessions.close(session.sessionId)
+      this.sessions.closeIfSame(session.sessionId, session)
       throw err
     }
+    this.assertSessionNotDeleted(params.sessionId)
     const { configOptions, models, modes } = configuration
     const fileCommands = loadSlashCommands(params.cwd)
 
@@ -1189,7 +1237,7 @@ export class PiAcpAgent implements ACPAgent {
     try {
       configuration = await getSessionConfiguration(proc)
     } catch (err) {
-      if (!alreadyLive) this.sessions.close(session.sessionId)
+      if (!alreadyLive) this.sessions.closeIfSame(session.sessionId, session)
       throw err
     }
     const { configOptions, models, modes } = configuration
@@ -1247,31 +1295,50 @@ export class PiAcpAgent implements ACPAgent {
   }
 
   async deleteSession(params: DeleteSessionRequest): Promise<DeleteSessionResponse> {
-    const stored = this.store.get(params.sessionId)
-    const piSession = findPiSession(params.sessionId)
-    const runtimeSession = this.sessions.maybeGet(params.sessionId)
+    const existingDelete = this.deletingSessions.get(params.sessionId)
+    if (existingDelete) {
+      await existingDelete
+      return {}
+    }
+    if (this.deletedSessionIds.has(params.sessionId)) return {}
+
+    const deletion = this.deleteSessionNow(params.sessionId)
+    this.deletingSessions.set(params.sessionId, deletion)
+    try {
+      await deletion
+    } finally {
+      this.deletingSessions.delete(params.sessionId)
+    }
+    return {}
+  }
+
+  private async deleteSessionNow(sessionId: string): Promise<void> {
+    this.deletedSessionIds.add(sessionId)
+
+    const stored = this.store.get(sessionId)
+    const piSession = findPiSession(sessionId)
+    const runtimeSession = this.sessions.maybeGet(sessionId)
+    const inFlightRestore = this.restoringSessions.get(sessionId)
 
     // Per ACP session/delete semantics, deleting a session that does not
     // exist (or is already gone) should succeed idempotently.
     // https://agentclientprotocol.com/protocol/v2/session-delete#semantics
-    if (!stored && !piSession && !runtimeSession) {
-      return {}
-    }
+    if (!stored && !piSession && !runtimeSession && !inFlightRestore) return
 
     if (runtimeSession) {
+      runtimeSession.shutdownForDelete()
+      await this.stopPiProcessForDelete(sessionId, runtimeSession.proc)
       try {
-        const stopped = await runtimeSession.proc.terminateAndWait()
-        if (!stopped) {
-          console.warn(`Failed to stop pi process for session ${params.sessionId} before delete`)
-        }
-      } catch (error) {
-        console.warn(`Failed to stop pi process for session ${params.sessionId} before delete`, error)
+        runtimeSession.proc.dispose?.()
+      } catch {
+        // The bounded termination attempt above remains authoritative.
       }
-      this.sessions.close(params.sessionId)
+      this.sessions.removeIfSame(sessionId, runtimeSession)
     }
 
-    const sessionFile = stored?.sessionFile ?? piSession?.sessionFile
+    if (inFlightRestore) await this.waitForRestoreDuringDelete(inFlightRestore)
 
+    const sessionFile = stored?.sessionFile ?? piSession?.sessionFile
     if (sessionFile) {
       try {
         if (existsSync(sessionFile)) unlinkSync(sessionFile)
@@ -1280,9 +1347,7 @@ export class PiAcpAgent implements ACPAgent {
       }
     }
 
-    this.store.delete(params.sessionId)
-
-    return {}
+    this.store.delete(sessionId)
   }
 
   async unstable_setSessionModel(params: { sessionId: string; modelId: string }): Promise<void> {

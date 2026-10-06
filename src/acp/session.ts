@@ -202,6 +202,19 @@ export class SessionManager {
     this.sessions.delete(sessionId)
   }
 
+  /** Remove a session only if it is still the same runtime instance. */
+  removeIfSame(sessionId: string, expected: PiAcpSession): boolean {
+    if (this.sessions.get(sessionId) !== expected) return false
+    this.sessions.delete(sessionId)
+    return true
+  }
+
+  /** Close a session only if it is still the same runtime instance. */
+  closeIfSame(sessionId: string, expected: PiAcpSession): void {
+    if (this.sessions.get(sessionId) !== expected) return
+    this.close(sessionId)
+  }
+
   async create(params: SessionCreateParams): Promise<PiAcpSession> {
     // Let pi manage session persistence in its default location (~/.pi/agent/sessions/...)
     // so sessions are visible to the regular `pi` CLI.
@@ -292,6 +305,7 @@ export class PiAcpSession {
   // Used to map abort semantics to ACP stopReason.
   // Applies to the currently running turn.
   private cancelRequested = false
+  private shuttingDown = false
 
   // Current in-flight turn (if any). Additional prompts are queued.
   private pendingTurn: QueuedTurn | null = null
@@ -379,6 +393,11 @@ export class PiAcpSession {
     return new Promise<StopReason>((resolve, reject) => {
       const queued: QueuedTurn = { message, images, completion, resolve, reject }
 
+      if (this.shuttingDown) {
+        resolve('cancelled')
+        return
+      }
+
       if (this.pendingTurn) {
         this.turnQueue.push(queued)
         this.emit({
@@ -396,6 +415,27 @@ export class PiAcpSession {
       }
 
       this.startTurn(queued)
+    })
+  }
+
+  /** Settle local turns before delete tears down the Pi subprocess. */
+  shutdownForDelete(): void {
+    if (this.shuttingDown) return
+    this.shuttingDown = true
+    this.cancelRequested = true
+    this.pendingTerminalOutcome = null
+    this.inAgentLoop = false
+
+    const pending = this.pendingTurn
+    this.pendingTurn = null
+    pending?.resolve('cancelled')
+
+    const queued = this.turnQueue.splice(0, this.turnQueue.length)
+    for (const turn of queued) turn.resolve('cancelled')
+
+    this.emit({
+      sessionUpdate: 'session_info_update',
+      _meta: { piAcp: { queueDepth: 0, running: false } }
     })
   }
 
