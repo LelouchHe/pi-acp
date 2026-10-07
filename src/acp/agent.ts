@@ -30,7 +30,7 @@ import { SessionManager, type PiAcpSession } from './session.js'
 import { translateAcpMcpServers, type PiMcpServerDefinitions } from './mcp.js'
 import { SessionStore } from './session-store.js'
 import { PiRpcProcess } from '../pi-rpc/process.js'
-import { listPiSessions, findPiSession } from './pi-sessions.js'
+import { listPiSessions, findPiSession, readPiSessionTitle } from './pi-sessions.js'
 import { normalizePiAssistantText, normalizePiMessageText } from './translate/pi-messages.js'
 import { toolResultToText } from './translate/pi-tools.js'
 import {
@@ -43,7 +43,7 @@ import {
   bashTerminalOutputMeta,
   isBashTool
 } from './translate/bash.js'
-import { promptToPiMessage } from './translate/prompt.js'
+import { promptToPiMessage, promptToSessionTitle } from './translate/prompt.js'
 import { loadSlashCommands, parseCommandArgs, toAvailableCommands } from './slash-commands.js'
 import { getAgentDir, getEnableSkillCommands, getEnabledModels, getQuietStartup } from './pi-settings.js'
 import { hasExtensionCommand, toAvailableCommandsFromPiGetCommands } from './pi-commands.js'
@@ -369,6 +369,9 @@ export class PiAcpAgent implements ACPAgent {
       this.lastSessionCwd = cwd
       this.store.upsert({ sessionId, cwd, sessionFile: stored.sessionFile })
 
+      const title = readPiSessionTitle(stored.sessionFile)
+      if (title) await session.publishTitle(title, null)
+
       return session
     })()
 
@@ -688,7 +691,7 @@ export class PiAcpAgent implements ACPAgent {
         }
 
         try {
-          await session.proc.setSessionName(name)
+          await session.setSessionName(name)
         } catch (e: any) {
           const msg = String(e?.message ?? e)
           const hint = /set_session_name/i.test(msg)
@@ -704,15 +707,6 @@ export class PiAcpAgent implements ACPAgent {
           })
           return { stopReason: 'end_turn' }
         }
-
-        await this.conn.sessionUpdate({
-          sessionId: session.sessionId,
-          update: {
-            sessionUpdate: 'session_info_update',
-            title: name,
-            updatedAt: new Date().toISOString()
-          }
-        })
 
         await this.conn.sessionUpdate({
           sessionId: session.sessionId,
@@ -1059,7 +1053,13 @@ export class PiAcpAgent implements ACPAgent {
       }
     }
 
-    const stopReason: StopReason = await session.prompt(message, images)
+    // Pi errors reject this promise (see PiAcpSession), so a resolved value is always an ACP stop reason.
+    const stopReason: StopReason = await session.prompt(
+      message,
+      images,
+      promptToSessionTitle(params.prompt) ?? undefined
+    )
+
     return { stopReason }
   }
 
