@@ -18,6 +18,7 @@ This fork adds behavior needed by multi-session ACP clients such as WebAgent:
 - `PI_ACP_REAL_PI=$(command -v pi) npm test` additionally runs an integration test against a real Pi with a real stdio and HTTP MCP server, checking the exposure mapping and that escaped values arrive literally.
 - The ACP smoke runner reports JSON-RPC error responses, malformed session responses, startup failures, and premature child exits instead of waiting indefinitely for a successful session/prompt sequence.
 - Renders non-text prompt blocks (resource links, embedded context, audio markers) as their own lines, so text that follows one no longer runs into the marker (e.g. `[Context] file:///…` + the user's prompt); consecutive text blocks still concatenate unchanged.
+- Stops the Pi subprocess when a session is deleted. Upstream `session/delete` removed only the stored session file and mapping, so a long-lived client that opened many sessions left one resident Pi subprocess behind per session until the adapter restarted. `session/delete` now settles the session's local turns, terminates the Pi process (SIGTERM, then SIGKILL after a bounded wait) and only then unlinks the stored session file. A restore that is already in flight is drained within a bound, and any process it spawns afterwards is stopped instead of being registered. A delete whose cleanup does not complete stays retryable — it keeps the captured session file path — instead of being reported as complete.
 
 ### Installing this fork
 
@@ -270,6 +271,7 @@ Project layout:
 
 - No ACP filesystem delegation (`fs/*`) and no ACP terminal delegation (`terminal/*`). pi reads/writes and executes locally.
 - Upstream only: MCP servers are accepted in ACP params and stored in session state, but not wired through to pi. This fork hands them to Pi's built-in MCP support instead (see [Changes in this fork](#changes-in-this-fork)); do not install `pi-mcp-adapter` alongside it, since that extension disables the built-in support.
+- No ACP `session/close`: pi-acp implements `session/delete` (which also stops the Pi subprocess — see [Changes in this fork](#changes-in-this-fork)) but has no non-destructive way to stop a subprocess while keeping the session. Clients should treat both `session/close` and `session/delete` as optional capabilities.
 - Assistant streaming is currently sent as `agent_message_chunk` (no separate thought stream).
 - Queue is implemented client-side and should work like pi's `one-at-a-time`
 - ~~ACP clients don't yet suport session history, but ACP sessions from `pi-acp` can be `/resume`d in pi directly~~
