@@ -20,7 +20,6 @@ import {
   type SetSessionConfigOptionResponse,
   type SetSessionModeRequest,
   type SetSessionModeResponse,
-  type StopReason,
   type DeleteSessionRequest,
   type DeleteSessionResponse,
   type McpServer
@@ -1053,14 +1052,15 @@ export class PiAcpAgent implements ACPAgent {
       }
     }
 
-    // Pi errors reject this promise (see PiAcpSession), so a resolved value is always an ACP stop reason.
-    const stopReason: StopReason = await session.prompt(
+    // Pi errors reject this promise (see PiAcpSession), so a resolved value is always an ACP result.
+    const { stopReason, usage } = await session.prompt(
       message,
       images,
       promptToSessionTitle(params.prompt) ?? undefined
     )
 
-    return { stopReason }
+    // `usage` is ACP's **UNSTABLE** cumulative token report; omitted when pi has no totals yet.
+    return { stopReason, ...(usage ? { usage } : {}) }
   }
 
   async cancel(params: CancelNotification): Promise<void> {

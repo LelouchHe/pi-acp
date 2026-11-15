@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { PiAcpSession } from '../../src/acp/session.js'
+import { PiAcpSession, type PromptTurnResult } from '../../src/acp/session.js'
 import { FakeAgentSideConnection, FakePiRpcProcess, asAgentConn } from '../helpers/fakes.js'
 
 function createSession(
@@ -19,7 +19,7 @@ function createSession(
   })
 }
 
-async function settlePrompt(proc: FakePiRpcProcess, prompt: Promise<string>): Promise<string> {
+async function settlePrompt(proc: FakePiRpcProcess, prompt: Promise<PromptTurnResult>): Promise<PromptTurnResult> {
   proc.emit({ type: 'agent_start' })
   proc.emit({ type: 'turn_end' })
   proc.emit({ type: 'agent_end' })
@@ -48,7 +48,7 @@ test('PiAcpSession: names a new session when its first prompt starts', async () 
   assert.equal((titleUpdates[0]!.update as any).title, 'Fix thread titles')
   assert.equal(typeof (titleUpdates[0]!.update as any).updatedAt, 'string')
 
-  assert.equal(await settlePrompt(proc, prompt), 'end_turn')
+  assert.equal((await settlePrompt(proc, prompt)).stopReason, 'end_turn')
   await settlePrompt(proc, session.prompt('second prompt', [], 'Second title'))
   assert.deepEqual(assignedNames, ['Fix thread titles'])
 })
@@ -65,7 +65,7 @@ test('PiAcpSession: preserves an existing session name', async () => {
 
   const reason = await settlePrompt(proc, session.prompt('hello', [], 'Automatic title'))
 
-  assert.equal(reason, 'end_turn')
+  assert.equal(reason.stopReason, 'end_turn')
   assert.equal(setNameCalls, 0)
   const titleUpdates = conn.updates.filter(update => (update.update as any).title !== undefined)
   assert.equal((titleUpdates.at(-1)!.update as any).title, 'Manual title')
@@ -85,7 +85,7 @@ test('PiAcpSession: does not overwrite a manual name assigned during the first p
   await session.setSessionName('Manual title')
   const reason = await settlePrompt(proc, prompt)
 
-  assert.equal(reason, 'end_turn')
+  assert.equal(reason.stopReason, 'end_turn')
   assert.deepEqual(assignedNames, ['Automatic title', 'Manual title'])
   const titleUpdates = conn.updates.filter(update => (update.update as any).title !== undefined)
   assert.equal((titleUpdates.at(-1)!.update as any).title, 'Manual title')
@@ -102,7 +102,7 @@ test('PiAcpSession: auto-title failures do not fail the prompt', async () => {
 
   const reason = await settlePrompt(proc, session.prompt('hello', [], 'Automatic title'))
 
-  assert.equal(reason, 'end_turn')
+  assert.equal(reason.stopReason, 'end_turn')
   const titleUpdates = conn.updates.filter(update => (update.update as any).title !== undefined)
   assert.equal(titleUpdates.length, 0)
 })

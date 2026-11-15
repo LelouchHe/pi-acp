@@ -31,7 +31,7 @@ test('PiAcpSession: expands /command before sending to pi', async () => {
   proc.emit({ type: 'agent_settled' })
   const reason = await p
 
-  assert.equal(reason, 'end_turn')
+  assert.equal(reason.stopReason, 'end_turn')
   assert.equal(proc.prompts.length, 1)
   assert.equal(proc.prompts[0]!.message, 'Expanded world')
 })

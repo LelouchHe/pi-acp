@@ -6,7 +6,8 @@ import type {
   StopReason as AcpStopReason,
   ToolCallContent,
   ToolCallLocation,
-  ToolKind
+  ToolKind,
+  Usage
 } from '@agentclientprotocol/sdk'
 import { RequestError } from '@agentclientprotocol/sdk'
 import { readFileSync } from 'node:fs'
@@ -47,12 +48,15 @@ export type StopReason = AcpStopReason
 
 type TerminalOutcome = { stopReason: StopReason } | { error: RequestError }
 
+/** One settled ACP prompt turn, plus pi's cumulative session usage when reported. */
+export type PromptTurnResult = { stopReason: StopReason; usage?: Usage }
+
 type QueuedTurn = {
   message: string
   images: unknown[]
   completion: 'agent_settled' | 'rpc_response'
   title?: string
-  resolve: (reason: StopReason) => void
+  resolve: (result: PromptTurnResult) => void
   reject: (err: unknown) => void
 }
 
@@ -74,7 +78,7 @@ export function toAcpUsageUpdate(stats: unknown): SessionUpdate | null {
   const used = value?.contextUsage?.tokens
   const size = value?.contextUsage?.contextWindow
 
-  if (typeof used !== 'number' || !Number.isSafeInteger(used) || used < 0) return null
+  if (!isTokenCount(used)) return null
   if (typeof size !== 'number' || !Number.isSafeInteger(size) || size <= 0) return null
 
   const cost = value?.cost
@@ -84,6 +88,30 @@ export function toAcpUsageUpdate(stats: unknown): SessionUpdate | null {
     size,
     ...(typeof cost === 'number' && Number.isFinite(cost) ? { cost: { amount: cost, currency: 'USD' } } : {})
   }
+}
+
+/**
+ * Map pi's cumulative session token totals to the ACP `PromptResponse.usage`
+ * payload, which is marked **UNSTABLE** in the protocol. Attached only when pi
+ * reports every required total, so clients never see a partial sum.
+ */
+export function toAcpPromptUsage(stats: unknown): Usage | null {
+  const tokens = (stats as PiSessionStats | null | undefined)?.tokens
+  if (!isTokenCount(tokens?.total) || !isTokenCount(tokens?.input) || !isTokenCount(tokens?.output)) {
+    return null
+  }
+
+  return {
+    totalTokens: tokens.total,
+    inputTokens: tokens.input,
+    outputTokens: tokens.output,
+    ...(isTokenCount(tokens.cacheRead) ? { cachedReadTokens: tokens.cacheRead } : {}),
+    ...(isTokenCount(tokens.cacheWrite) ? { cachedWriteTokens: tokens.cacheWrite } : {})
+  }
+}
+
+function isTokenCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 
 function findUniqueLineNumber(text: string, needle: string): number | undefined {
@@ -379,7 +407,7 @@ export class PiAcpSession {
     })
   }
 
-  async prompt(message: string, images: unknown[] = [], title?: string): Promise<StopReason> {
+  async prompt(message: string, images: unknown[] = [], title?: string): Promise<PromptTurnResult> {
     // Pi RPC executes registered extension commands, but file-based prompt templates
     // are expanded by the interactive client, so the adapter expands those here.
     const expandedMessage = expandSlashCommand(message, this.fileCommands)
@@ -402,12 +430,12 @@ export class PiAcpSession {
     images: unknown[],
     completion: QueuedTurn['completion'],
     title?: string
-  ): Promise<StopReason> {
-    return new Promise<StopReason>((resolve, reject) => {
+  ): Promise<PromptTurnResult> {
+    return new Promise<PromptTurnResult>((resolve, reject) => {
       const queued: QueuedTurn = { message, images, completion, title, resolve, reject }
 
       if (this.shuttingDown) {
-        resolve('cancelled')
+        resolve({ stopReason: 'cancelled' })
         return
       }
 
@@ -441,10 +469,10 @@ export class PiAcpSession {
 
     const pending = this.pendingTurn
     this.pendingTurn = null
-    pending?.resolve('cancelled')
+    pending?.resolve({ stopReason: 'cancelled' })
 
     const queued = this.turnQueue.splice(0, this.turnQueue.length)
-    for (const turn of queued) turn.resolve('cancelled')
+    for (const turn of queued) turn.resolve({ stopReason: 'cancelled' })
 
     this.emit({
       sessionUpdate: 'session_info_update',
@@ -458,7 +486,7 @@ export class PiAcpSession {
 
     if (this.turnQueue.length) {
       const queued = this.turnQueue.splice(0, this.turnQueue.length)
-      for (const t of queued) t.resolve('cancelled')
+      for (const t of queued) t.resolve({ stopReason: 'cancelled' })
 
       this.emit({
         sessionUpdate: 'agent_message_chunk',
@@ -546,19 +574,22 @@ export class PiAcpSession {
   /**
    * Best-effort: publish context occupancy from supplied stats or a bounded Pi
    * stats query. Queued updates are flushed even when the query fails or times out,
-   * so callers can await delivery before resolving `session/prompt`.
+   * so callers can await delivery before resolving `session/prompt`. Returns the
+   * stats it used so the caller can reuse them for the prompt's cumulative usage
+   * instead of scanning the session history twice.
    */
-  async publishContextUsage(stats?: PiSessionStats | null): Promise<void> {
+  async publishContextUsage(stats?: PiSessionStats | null): Promise<PiSessionStats | null> {
+    let snapshot: PiSessionStats | null = null
     try {
       // Older/stubbed pi processes may not expose the stats RPC at all. Callers
       // that already fetched stats for their own output can pass them through
       // instead of rescanning the session history a second time.
-      const snapshot =
+      snapshot =
         stats !== undefined
           ? stats
           : typeof this.proc.getSessionStats === 'function'
             ? await this.proc.getSessionStats(SESSION_STATS_TIMEOUT_MS)
-            : undefined
+            : null
       const update = toAcpUsageUpdate(snapshot)
       if (update) this.emit(update)
     } catch {
@@ -566,6 +597,7 @@ export class PiAcpSession {
     }
 
     await this.flushEmits()
+    return snapshot
   }
 
   private async settleTurn(): Promise<void> {
@@ -576,14 +608,15 @@ export class PiAcpSession {
     // revise it, while the bounded stats query and queued updates are being flushed.
     const cancelled = this.cancelRequested
     const terminalOutcome = this.pendingTerminalOutcome
-    await this.publishContextUsage()
+    const stats = await this.publishContextUsage()
+    const usage = toAcpPromptUsage(stats)
 
     if (cancelled) {
-      this.completeTurn(turn, 'cancelled')
+      this.completeTurn(turn, 'cancelled', usage)
     } else if (terminalOutcome && 'error' in terminalOutcome) {
       this.failTurn(turn, terminalOutcome.error)
     } else {
-      this.completeTurn(turn, terminalOutcome?.stopReason ?? 'end_turn')
+      this.completeTurn(turn, terminalOutcome?.stopReason ?? 'end_turn', usage)
     }
   }
 
@@ -670,9 +703,16 @@ export class PiAcpSession {
       .prompt(t.message, t.images)
       .then(() => {
         if (t.completion !== 'rpc_response' || this.pendingTurn !== t) return
-        void this.flushEmits()
-          .then(() => this.publishContextUsage())
-          .finally(() => this.completeTurn(t, this.cancelRequested ? 'cancelled' : 'end_turn'))
+        void (async () => {
+          let stats: PiSessionStats | null = null
+          try {
+            await this.flushEmits()
+            stats = await this.publishContextUsage()
+          } catch {
+            // Delivery failures must not leave the turn unresolved.
+          }
+          this.completeTurn(t, this.cancelRequested ? 'cancelled' : 'end_turn', toAcpPromptUsage(stats))
+        })()
       })
       .catch(err => {
         // If the subprocess errors before we get `agent_settled`, treat as error unless cancelled.
@@ -685,7 +725,7 @@ export class PiAcpSession {
           if (authErr) {
             t.reject(authErr)
           } else if (this.cancelRequested) {
-            t.resolve('cancelled')
+            t.resolve({ stopReason: 'cancelled' })
           } else {
             const message = String((err as any)?.message ?? err ?? 'Pi prompt RPC failed.')
             t.reject(err instanceof RequestError ? err : new RequestError(-32603, message))
@@ -706,9 +746,9 @@ export class PiAcpSession {
       })
   }
 
-  private completeTurn(turn: QueuedTurn, reason: StopReason): void {
+  private completeTurn(turn: QueuedTurn, reason: StopReason, usage: Usage | null = null): void {
     if (this.pendingTurn !== turn) return
-    turn.resolve(reason)
+    turn.resolve(usage ? { stopReason: reason, usage } : { stopReason: reason })
     this.finishTurn(turn)
   }
 

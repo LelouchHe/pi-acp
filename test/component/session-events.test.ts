@@ -44,7 +44,7 @@ test('PiAcpSession: emits usage_update before an agent turn settles', async () =
 
   const prompt = session.prompt('hello')
   proc.emit({ type: 'agent_settled' })
-  assert.equal(await prompt, 'end_turn')
+  assert.equal((await prompt).stopReason, 'end_turn')
 
   const usage = conn.updates.find(msg => msg.update.sessionUpdate === 'usage_update')
   assert.deepEqual(usage, {
@@ -758,7 +758,7 @@ test('PiAcpSession: prompt stays open through retry runs until agent_settled', a
 
   proc.emit({ type: 'agent_settled' })
   const reason = await p
-  assert.equal(reason, 'end_turn')
+  assert.equal(reason.stopReason, 'end_turn')
 })
 
 test('PiAcpSession: does not re-emit startup info on first prompt after it was already sent', async () => {
@@ -799,7 +799,7 @@ test('PiAcpSession: does not re-emit startup info on first prompt after it was a
   proc.emit({ type: 'agent_settled' })
 
   const reason = await p
-  assert.equal(reason, 'end_turn')
+  assert.equal(reason.stopReason, 'end_turn')
 })
 
 test('PiAcpSession: rejects an RPC prompt failure instead of returning an error stop reason', async () => {
@@ -900,7 +900,7 @@ test('PiAcpSession: clears a transient model error when a retry succeeds', async
   })
   proc.emit({ type: 'agent_settled' })
 
-  assert.equal(await prompt, 'end_turn')
+  assert.equal((await prompt).stopReason, 'end_turn')
 })
 
 test('PiAcpSession: maps a final length stop to ACP max_tokens', async () => {
@@ -922,7 +922,7 @@ test('PiAcpSession: maps a final length stop to ACP max_tokens', async () => {
   })
   proc.emit({ type: 'agent_settled' })
 
-  assert.equal(await prompt, 'max_tokens')
+  assert.equal((await prompt).stopReason, 'max_tokens')
 })
 
 test('PiAcpSession: rejects a final non-client abort', async () => {
@@ -982,7 +982,7 @@ test('PiAcpSession: maps deferred completion to ACP end_turn', async () => {
   })
   proc.emit({ type: 'agent_settled' })
 
-  assert.equal(await prompt, 'end_turn')
+  assert.equal((await prompt).stopReason, 'end_turn')
 })
 
 test('PiAcpSession: tolerates a missing final Pi stop reason', async () => {
@@ -1004,7 +1004,7 @@ test('PiAcpSession: tolerates a missing final Pi stop reason', async () => {
   })
   proc.emit({ type: 'agent_settled' })
 
-  assert.equal(await prompt, 'end_turn')
+  assert.equal((await prompt).stopReason, 'end_turn')
 })
 
 test('PiAcpSession: cancel flips stopReason to cancelled', async () => {
@@ -1038,7 +1038,7 @@ test('PiAcpSession: cancel flips stopReason to cancelled', async () => {
   const reason = await p
 
   assert.equal(proc.abortCount, 1)
-  assert.equal(reason, 'cancelled')
+  assert.equal(reason.stopReason, 'cancelled')
 })
 
 test('PiAcpSession: extension command completes on RPC response without agent_settled', async () => {
@@ -1081,7 +1081,7 @@ test('PiAcpSession: queues extension command behind an active agent prompt', asy
   assert.equal(proc.prompts[0]!.message, 'one')
 
   proc.emit({ type: 'agent_settled' })
-  assert.equal(await agentPrompt, 'end_turn')
+  assert.equal((await agentPrompt).stopReason, 'end_turn')
   await extensionCommand
 
   assert.equal(proc.prompts.length, 2)
@@ -1113,7 +1113,7 @@ test('PiAcpSession: queues concurrent prompt and starts it after agent_settled',
   proc.emit({ type: 'agent_settled' })
 
   const r1 = await first
-  assert.equal(r1, 'end_turn')
+  assert.equal(r1.stopReason, 'end_turn')
 
   assert.equal(proc.prompts.length, 2)
   assert.equal(proc.prompts[1]!.message, 'two')
@@ -1124,7 +1124,7 @@ test('PiAcpSession: queues concurrent prompt and starts it after agent_settled',
   proc.emit({ type: 'agent_settled' })
 
   const r2 = await second
-  assert.equal(r2, 'end_turn')
+  assert.equal(r2.stopReason, 'end_turn')
 })
 
 test('PiAcpSession: cancel clears queued prompts', async () => {
@@ -1154,8 +1154,8 @@ test('PiAcpSession: cancel clears queued prompts', async () => {
   const r1 = await first
   const r2 = await second
 
-  assert.equal(r1, 'cancelled')
-  assert.equal(r2, 'cancelled')
+  assert.equal(r1.stopReason, 'cancelled')
+  assert.equal(r2.stopReason, 'cancelled')
 })
 
 test('PiAcpSession: expands /command before sending to pi', async () => {
@@ -1188,7 +1188,7 @@ test('PiAcpSession: expands /command before sending to pi', async () => {
   proc.emit({ type: 'agent_settled' })
 
   const reason = await p
-  assert.equal(reason, 'end_turn')
+  assert.equal(reason.stopReason, 'end_turn')
 })
 
 test('PiAcpSession: tags extension notify chunks with severity in _meta', async () => {
@@ -1300,7 +1300,7 @@ test('PiAcpSession: emits usage_update from contextUsage before resolving prompt
   assert.equal(resolved, false)
   releaseDelivery!()
 
-  assert.equal(await p, 'end_turn')
+  assert.equal((await p).stopReason, 'end_turn')
   assert.equal(proc.getSessionStatsCount, 1)
   assert.deepEqual(
     conn.updates.filter(u => u.update.sessionUpdate === 'usage_update').map(u => u.update),
@@ -1328,7 +1328,7 @@ test('PiAcpSession: skips usage_update when contextUsage tokens are null', async
   const p = session.prompt('hello')
   proc.emit({ type: 'agent_settled' })
 
-  assert.equal(await p, 'end_turn')
+  assert.equal((await p).stopReason, 'end_turn')
   assert.equal(
     conn.updates.some(u => u.update.sessionUpdate === 'usage_update'),
     false
@@ -1365,7 +1365,7 @@ test('PiAcpSession: skips usage_update for invalid contextUsage values', async (
     const p = session.prompt('hello')
     proc.emit({ type: 'agent_settled' })
 
-    assert.equal(await p, 'end_turn', name)
+    assert.equal((await p).stopReason, 'end_turn', name)
     assert.equal(
       conn.updates.some(u => u.update.sessionUpdate === 'usage_update'),
       false,
@@ -1391,7 +1391,7 @@ test('PiAcpSession: get_session_stats rejection does not break the prompt', asyn
   const p = session.prompt('hello')
   proc.emit({ type: 'agent_settled' })
 
-  assert.equal(await p, 'end_turn')
+  assert.equal((await p).stopReason, 'end_turn')
   assert.equal(proc.getSessionStatsCount, 1)
   assert.equal(
     conn.updates.some(u => u.update.sessionUpdate === 'usage_update'),
@@ -1418,7 +1418,7 @@ test('PiAcpSession: get_session_stats timeout does not block the prompt', async 
   const p = session.prompt('hello')
   proc.emit({ type: 'agent_settled' })
 
-  assert.equal(await p, 'end_turn')
+  assert.equal((await p).stopReason, 'end_turn')
   assert.equal(proc.getSessionStatsCount, 1)
   assert.equal(
     conn.updates.some(u => u.update.sessionUpdate === 'usage_update'),
@@ -1444,7 +1444,7 @@ test('PiAcpSession: cancelled turn still reports cancelled after usage publish',
   await session.cancel()
   proc.emit({ type: 'agent_settled' })
 
-  assert.equal(await p, 'cancelled')
+  assert.equal((await p).stopReason, 'cancelled')
   assert.deepEqual(
     conn.updates.filter(u => u.update.sessionUpdate === 'usage_update').map(u => u.update),
     [{ sessionUpdate: 'usage_update', used: 42, size: 100 }]
